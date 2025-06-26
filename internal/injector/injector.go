@@ -730,11 +730,10 @@ func (i *Injector) diskLoadDLL() error {
 // Note: memoryLoadDLL method is defined in memory_load.go
 
 // createTempDllFile 创建临时DLL文件
-func (i *Injector) createTempDllFile(dllBytes []byte) string {
+func (i *Injector) createTempDllFile(dllBytes []byte) (string, error) {
 	tempFile, err := os.CreateTemp("", "dll_*.dll")
 	if err != nil {
-		i.logger.Warn("Failed to create temporary file, using original DLL path", "error", err)
-		return i.dllPath
+		return "", fmt.Errorf("failed to create temporary file: %v", err)
 	}
 
 	// 写入DLL内容
@@ -742,19 +741,17 @@ func (i *Injector) createTempDllFile(dllBytes []byte) string {
 	tempFile.Close()
 
 	if err != nil {
-		i.logger.Warn("Failed to write DLL content to temporary file", "error", err)
 		os.Remove(tempFile.Name())
-		return i.dllPath
+		return "", fmt.Errorf("failed to write DLL content to temporary file: %v", err)
 	}
 
 	if bytesWritten != len(dllBytes) {
-		i.logger.Warn("Incomplete write to temporary file", "expected", len(dllBytes), "written", bytesWritten)
 		os.Remove(tempFile.Name())
-		return i.dllPath
+		return "", fmt.Errorf("incomplete write to temporary file: expected %d bytes, written %d bytes", len(dllBytes), bytesWritten)
 	}
 
 	i.logger.Info("Created temporary DLL file", "path", tempFile.Name(), "size", bytesWritten)
-	return tempFile.Name()
+	return tempFile.Name(), nil
 }
 
 // manualMapDLL 使用手动映射方式加载DLL
@@ -2108,7 +2105,10 @@ func (i *Injector) earlyBirdMemoryInject(targetPath string, dllBytes []byte) err
 	i.logger.Info("Starting Early Bird memory injection", "target_path", targetPath, "dll_size", len(dllBytes))
 
 	// 创建临时DLL文件
-	tempDllPath := i.createTempDllFile(dllBytes)
+	tempDllPath, err := i.createTempDllFile(dllBytes)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary DLL file: %v", err)
+	}
 	defer os.Remove(tempDllPath)
 
 	// 使用磁盘注入方法，但使用临时文件
@@ -2971,7 +2971,10 @@ func (i *Injector) performInjectionWhileFrozen(hProcess windows.Handle, dllPath 
 // performMemoryInjection 执行内存注入
 func (i *Injector) performMemoryInjection(hProcess windows.Handle, dllBytes []byte) error {
 	// 创建临时DLL文件
-	tempDllPath := i.createTempDllFile(dllBytes)
+	tempDllPath, err := i.createTempDllFile(dllBytes)
+	if err != nil {
+		return fmt.Errorf("failed to create temporary DLL file: %v", err)
+	}
 	defer os.Remove(tempDllPath)
 
 	return i.performDiskInjection(hProcess, tempDllPath)
