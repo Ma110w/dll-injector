@@ -14,7 +14,6 @@ var (
 )
 
 func loop() {
-	fmt.Printf("Loop iteration: %d\n", counter)
 	counter++
 
 	giu.SingleWindow().Layout(
@@ -32,12 +31,11 @@ func loop() {
 			giu.InputText(&testText).Size(200),
 			giu.Spacing(),
 			giu.Button("Click Me!").OnClick(func() {
-				fmt.Println("Button clicked!")
-				log.Printf("Button clicked at iteration %d", counter)
+				log.Printf("Test button clicked at iteration %d", counter)
 			}),
 			giu.Spacing(),
 			giu.Button("Exit").OnClick(func() {
-				fmt.Println("Exit button clicked")
+				log.Println("Test application exit requested")
 				// We'll let the window close naturally
 			}),
 		),
@@ -45,16 +43,13 @@ func loop() {
 }
 
 func main() {
-	fmt.Println("Starting GIU test application...")
-	log.Println("Creating master window...")
+	log.Println("Starting GIU test application...")
 
 	wnd := giu.NewMasterWindow("GIU Test", 400, 300, 0)
-	
-	fmt.Println("Master window created, starting loop...")
+
 	log.Println("Starting main loop...")
 
 	wnd.Run(loop)
 
-	fmt.Println("Application finished")
-	log.Println("Application finished")
+	log.Println("Test application finished")
 }

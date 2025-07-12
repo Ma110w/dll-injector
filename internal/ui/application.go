@@ -307,13 +307,11 @@ func (app *Application) refreshProcessList() {
 
 // Run starts the GUI application
 func (app *Application) Run() error {
-	fmt.Println("=== STARTING DLL INJECTOR GUI ===")
 	app.logger.Info("Starting GUI application", zap.String("title", app.title), zap.Int32("width", app.width), zap.Int32("height", app.height))
 
 	// Create master window with explicit flags
 	wnd := giu.NewMasterWindow(app.title, int(app.width), int(app.height), giu.MasterWindowFlagsNotResizable)
 
-	fmt.Println("=== MASTER WINDOW CREATED ===")
 	app.logger.Info("Master window created, starting main loop...")
 
 	// Add initial log entry
@@ -323,7 +321,6 @@ func (app *Application) Run() error {
 	// Run the main loop
 	wnd.Run(app.loop)
 
-	fmt.Println("=== GUI APPLICATION FINISHED ===")
 	app.logger.Info("GUI application finished")
 	return nil
 }
@@ -429,28 +426,28 @@ func (app *Application) buildInjectionMethodSection() giu.Widget {
 			giu.Style().SetColor(giu.StyleColorCheckMark, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
 				giu.RadioButton("Standard Injection", app.injectionMethod == 0).OnChange(func() {
 					app.injectionMethod = 0
-					fmt.Println("✓ Injection method selected: Standard Injection")
+					app.addLogLine("✓ Injection method selected: Standard Injection")
 				}),
 			),
 			giu.RadioButton("SetWindowsHookEx", app.injectionMethod == 1).OnChange(func() {
 				app.injectionMethod = 1
-				fmt.Println("✓ Injection method selected: SetWindowsHookEx")
+				app.addLogLine("✓ Injection method selected: SetWindowsHookEx")
 			}),
 			giu.RadioButton("QueueUserAPC", app.injectionMethod == 2).OnChange(func() {
 				app.injectionMethod = 2
-				fmt.Println("✓ Injection method selected: QueueUserAPC")
+				app.addLogLine("✓ Injection method selected: QueueUserAPC")
 			}),
 			giu.RadioButton("Early Bird", app.injectionMethod == 3).OnChange(func() {
 				app.injectionMethod = 3
-				fmt.Println("✓ Injection method selected: Early Bird")
+				app.addLogLine("✓ Injection method selected: Early Bird")
 			}),
 			giu.RadioButton("DLL Notification", app.injectionMethod == 4).OnChange(func() {
 				app.injectionMethod = 4
-				fmt.Println("✓ Injection method selected: DLL Notification")
+				app.addLogLine("✓ Injection method selected: DLL Notification")
 			}),
 			giu.RadioButton("Job Object", app.injectionMethod == 5).OnChange(func() {
 				app.injectionMethod = 5
-				fmt.Println("✓ Injection method selected: Job Object")
+				app.addLogLine("✓ Injection method selected: Job Object")
 			}),
 		),
 	)
@@ -474,7 +471,6 @@ func (app *Application) buildAntiDetectionSection() giu.Widget {
 				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 255, G: 255, B: 255, A: 255}).To(
 					giu.Button("Basic").Size(60, 25).OnClick(func() {
 						app.selectedTab = 0
-						fmt.Println("Basic tab selected")
 					}),
 				),
 			),
@@ -482,14 +478,12 @@ func (app *Application) buildAntiDetectionSection() giu.Widget {
 			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 				giu.Button("Advanced").Size(80, 25).OnClick(func() {
 					app.selectedTab = 1
-					fmt.Println("Advanced tab selected")
 				}),
 			),
 			// Preset tab (inactive/gray)
 			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 				giu.Button("Preset").Size(60, 25).OnClick(func() {
 					app.selectedTab = 2
-					fmt.Println("Preset tab selected")
 				}),
 			),
 		),
@@ -573,7 +567,7 @@ func (app *Application) buildTabContent() giu.Widget {
 					app.manualMapping = true
 					app.peHeaderErasure = true
 					app.pathSpoofing = true
-					fmt.Println("✓ Stealth mode preset applied")
+					app.addLogLine("✓ Stealth mode preset applied")
 				}),
 				giu.Button("Maximum Evasion").Size(120, 30).OnClick(func() {
 					app.memoryLoad = true
@@ -583,11 +577,11 @@ func (app *Application) buildTabContent() giu.Widget {
 					app.pteSpoofing = true
 					app.vadManipulation = true
 					app.directSyscalls = true
-					fmt.Println("✓ Maximum evasion preset applied")
+					app.addLogLine("✓ Maximum evasion preset applied")
 				}),
 				giu.Button("Clear All").Size(120, 30).OnClick(func() {
 					app.clearAllOptions()
-					fmt.Println("✓ All options cleared")
+					app.addLogLine("✓ All options cleared")
 				}),
 			),
 		)
@@ -626,7 +620,7 @@ func (app *Application) buildConsoleLogsSection() giu.Widget {
 			giu.Dummy(-1, 0), // Push button to right
 			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 				giu.Button("🏠").Size(25, 25).OnClick(func() {
-					fmt.Println("Home button clicked")
+					// Home button functionality can be implemented here if needed
 				}),
 			),
 		),
@@ -661,22 +655,17 @@ func (app *Application) clearAllOptions() {
 func (app *Application) onInjectClickedSimple() {
 	if app.selectedDllPath == "" {
 		app.addLogLine("❌ Error: No DLL file selected")
-		fmt.Println("Error: No DLL file selected")
 		return
 	}
 
 	if app.selectedPID <= 0 {
 		app.addLogLine("❌ Error: No target process selected")
-		fmt.Println("Error: No target process selected")
 		return
 	}
 
 	methodName := app.methodNames[app.injectionMethod]
 	app.addLogLine(fmt.Sprintf("🚀 Starting injection: %s -> PID %d using %s",
 		filepath.Base(app.selectedDllPath), app.selectedPID, methodName))
-
-	fmt.Printf("Injection started: DLL=%s, PID=%d, Method=%s\n",
-		app.selectedDllPath, app.selectedPID, methodName)
 }
 
 // buildProcessSelectionDialog builds the process selection dialog
@@ -993,7 +982,6 @@ func (app *Application) buildProcessTable() giu.Widget {
 							app.showProcessDialog = false
 							app.processSearchText = "" // Clear search
 							app.addLogLine(fmt.Sprintf("✓ Process selected: %s (PID: %d)", proc.Name, proc.PID))
-							fmt.Printf("Process selected: %s (PID: %d)\n", proc.Name, proc.PID)
 						}),
 					),
 				),
@@ -1013,7 +1001,6 @@ func (app *Application) buildProcessTable() giu.Widget {
 						app.showProcessDialog = false
 						app.processSearchText = "" // Clear search
 						app.addLogLine(fmt.Sprintf("✓ Process selected: %s (PID: %d)", proc.Name, proc.PID))
-						fmt.Printf("Process selected: %s (PID: %d)\n", proc.Name, proc.PID)
 					}),
 				),
 			)
