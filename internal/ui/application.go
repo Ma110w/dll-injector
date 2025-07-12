@@ -309,7 +309,7 @@ func (app *Application) buildTopRow() giu.Widget {
 					giu.InputText(&app.selectedDllPath).Hint("Select DLL file path...").Size(400),
 				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
-					giu.Button("📁").Size(30, 0).OnClick(func() {
+					giu.Button("Browse").Size(60, 0).OnClick(func() {
 						app.addLogLine("📁 Opening Windows file dialog...")
 						go app.openNativeFileDialog()
 					}),
