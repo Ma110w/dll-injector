@@ -1,9 +1,10 @@
 package process
 
 import (
+	"image"
+	"image/color"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
-	"
 )
 
 // GetProcessIcon 获取进程图标（简化版本）
