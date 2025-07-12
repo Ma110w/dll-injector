@@ -158,6 +158,83 @@ func NewApplication(title string, width, height int) *Application {
 	return app
 }
 
+// isOptionCompatible checks if an anti-detection option is compatible with the current injection method
+func (app *Application) isOptionCompatible(option string) bool {
+	method := app.injectionMethod
+
+	// Define compatibility matrix based on injection method logic
+	switch option {
+	case "memory_load":
+		// Memory Load works with all methods except SetWindowsHookEx (needs disk file)
+		return method != 1 // SetWindowsHookEx
+
+	case "manual_mapping":
+		// Manual Mapping works with all methods except SetWindowsHookEx and DLL Notification
+		return method != 1 && method != 4 // SetWindowsHookEx, DLL Notification
+
+	case "pe_header_erasure":
+		// PE Header Erasure works with memory-based methods
+		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+
+	case "entry_point_erasure":
+		// Entry Point Erasure works with memory-based methods
+		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+
+	case "path_spoofing":
+		// Path Spoofing works with disk-based methods
+		return method == 0 || method == 1 || method == 4 // Standard, SetWindowsHookEx, DLL Notification
+
+	case "legit_process":
+		// Legitimate Process Injection is a standalone technique
+		return method == 0 // Only with Standard for simplicity
+
+	case "pte_spoofing":
+		// PTE Spoofing works with memory allocation methods
+		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+
+	case "vad_manipulation":
+		// VAD Manipulation works with memory allocation methods
+		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+
+	case "remove_vad_node":
+		// Remove VAD Node works with memory allocation methods
+		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+
+	case "thread_stack_allocation":
+		// Thread Stack Allocation works with thread-based methods
+		return method == 0 || method == 2 || method == 3 // Standard, QueueUserAPC, Early Bird
+
+	case "direct_syscalls":
+		// Direct Syscalls work with all methods
+		return true
+
+	default:
+		return true
+	}
+}
+
+// buildCompatibleCheckbox creates a checkbox that is enabled/disabled based on injection method compatibility
+func (app *Application) buildCompatibleCheckbox(label string, option string, value *bool) giu.Widget {
+	isCompatible := app.isOptionCompatible(option)
+
+	if !isCompatible {
+		// If not compatible, disable the checkbox and show grayed out
+		*value = false // Force disable incompatible options
+		return giu.Style().
+			SetColor(giu.StyleColorText, color.RGBA{R: 100, G: 100, B: 100, A: 255}).
+			SetColor(giu.StyleColorCheckMark, color.RGBA{R: 100, G: 100, B: 100, A: 255}).
+			SetColor(giu.StyleColorFrameBg, color.RGBA{R: 40, G: 40, B: 40, A: 255}).To(
+			giu.Row(
+				giu.Label(fmt.Sprintf("☐ %s (incompatible)", label)),
+				giu.Tooltip(fmt.Sprintf("%s is not compatible with the selected injection method", label)),
+			),
+		)
+	}
+
+	// If compatible, show normal checkbox
+	return giu.Checkbox(label, value)
+}
+
 // setupLogger initializes the logger
 func (app *Application) setupLogger() {
 	encoderConfig := zapcore.EncoderConfig{
@@ -431,30 +508,30 @@ func (app *Application) buildTabContent() giu.Widget {
 			// First row of checkboxes
 			giu.Row(
 				giu.Column(
-					giu.Checkbox("Memory Load", &app.memoryLoad),
+					app.buildCompatibleCheckbox("Memory Load", "memory_load", &app.memoryLoad),
 				),
 				giu.Dummy(120, 0), // Spacer
 				giu.Column(
-					giu.Checkbox("Manual Mapping", &app.manualMapping),
+					app.buildCompatibleCheckbox("Manual Mapping", "manual_mapping", &app.manualMapping),
 				),
 				giu.Dummy(120, 0), // Spacer
 				giu.Column(
-					giu.Checkbox("Erase PE Header", &app.peHeaderErasure),
+					app.buildCompatibleCheckbox("Erase PE Header", "pe_header_erasure", &app.peHeaderErasure),
 				),
 			),
 			giu.Spacing(),
 			// Second row of checkboxes
 			giu.Row(
 				giu.Column(
-					giu.Checkbox("Path Spoofing", &app.pathSpoofing),
+					app.buildCompatibleCheckbox("Path Spoofing", "path_spoofing", &app.pathSpoofing),
 				),
 				giu.Dummy(120, 0), // Spacer
 				giu.Column(
-					giu.Checkbox("Legitimate Process", &app.legitProcessInjection),
+					app.buildCompatibleCheckbox("Legitimate Process", "legit_process", &app.legitProcessInjection),
 				),
 				giu.Dummy(120, 0), // Spacer
 				giu.Column(
-					giu.Checkbox("Erase Entry Point", &app.entryPointErase),
+					app.buildCompatibleCheckbox("Erase Entry Point", "entry_point_erasure", &app.entryPointErase),
 				),
 			),
 		)
@@ -462,25 +539,25 @@ func (app *Application) buildTabContent() giu.Widget {
 		return giu.Column(
 			giu.Row(
 				giu.Column(
-					giu.Checkbox("PTE Spoofing", &app.pteSpoofing),
+					app.buildCompatibleCheckbox("PTE Spoofing", "pte_spoofing", &app.pteSpoofing),
 				),
 				giu.Dummy(120, 0),
 				giu.Column(
-					giu.Checkbox("VAD Manipulation", &app.vadManipulation),
+					app.buildCompatibleCheckbox("VAD Manipulation", "vad_manipulation", &app.vadManipulation),
 				),
 				giu.Dummy(120, 0),
 				giu.Column(
-					giu.Checkbox("Remove VAD Node", &app.removeVADNode),
+					app.buildCompatibleCheckbox("Remove VAD Node", "remove_vad_node", &app.removeVADNode),
 				),
 			),
 			giu.Spacing(),
 			giu.Row(
 				giu.Column(
-					giu.Checkbox("Thread Stack Alloc", &app.allocBehindThreadStack),
+					app.buildCompatibleCheckbox("Thread Stack Alloc", "thread_stack_allocation", &app.allocBehindThreadStack),
 				),
 				giu.Dummy(120, 0),
 				giu.Column(
-					giu.Checkbox("Direct Syscalls", &app.directSyscalls),
+					app.buildCompatibleCheckbox("Direct Syscalls", "direct_syscalls", &app.directSyscalls),
 				),
 				giu.Dummy(120, 0),
 				giu.Column(
