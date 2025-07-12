@@ -708,45 +708,39 @@ func (app *Application) buildProcessListContent() giu.Widget {
 
 		isSelected := proc.PID == app.selectedPID
 
+		// Create clickable row using Selectable
+		processText := fmt.Sprintf("%-8d %-20s %s", proc.PID, proc.Name, execPath)
+
 		var rowWidget giu.Widget
 		if isSelected {
-			// Highlight selected process
-			rowWidget = giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 0, G: 255, B: 0, A: 255}).To(
-				giu.Row(
-					giu.Label(fmt.Sprintf("%d", proc.PID)),
-					giu.Dummy(80, 0),
-					giu.Label(proc.Name),
-					giu.Dummy(150, 0),
-					giu.Label(execPath),
-					giu.Dummy(300, 0),
-					giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
-						giu.Button("✓ Selected").OnClick(func() {
-							app.selectedPID = proc.PID
-							app.selectedProcessName = proc.Name
-							app.showProcessDialog = false
-							app.processSearchText = ""
-							app.addLogLine(fmt.Sprintf("✅ Process selected: %s (PID: %d)", proc.Name, proc.PID))
-						}),
-					),
-				),
+			// Highlight selected process with green background
+			rowWidget = giu.Style().
+				SetColor(giu.StyleColorText, color.RGBA{R: 255, G: 255, B: 255, A: 255}).
+				SetColor(giu.StyleColorHeader, color.RGBA{R: 0, G: 100, B: 0, A: 100}).
+				SetColor(giu.StyleColorHeaderHovered, color.RGBA{R: 0, G: 120, B: 0, A: 120}).
+				SetColor(giu.StyleColorHeaderActive, color.RGBA{R: 0, G: 140, B: 0, A: 140}).To(
+				giu.Selectable(processText).Selected(true).OnClick(func() {
+					app.selectedPID = proc.PID
+					app.selectedProcessName = proc.Name
+					app.showProcessDialog = false
+					app.processSearchText = ""
+					app.addLogLine(fmt.Sprintf("✅ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+				}),
 			)
 		} else {
-			rowWidget = giu.Row(
-				giu.Label(fmt.Sprintf("%d", proc.PID)),
-				giu.Dummy(80, 0),
-				giu.Label(proc.Name),
-				giu.Dummy(150, 0),
-				giu.Label(execPath),
-				giu.Dummy(300, 0),
-				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 100, G: 100, B: 100, A: 255}).To(
-					giu.Button("Select").OnClick(func() {
-						app.selectedPID = proc.PID
-						app.selectedProcessName = proc.Name
-						app.showProcessDialog = false
-						app.processSearchText = ""
-						app.addLogLine(fmt.Sprintf("✅ Process selected: %s (PID: %d)", proc.Name, proc.PID))
-					}),
-				),
+			// Normal process row - clickable
+			rowWidget = giu.Style().
+				SetColor(giu.StyleColorText, color.RGBA{R: 200, G: 200, B: 200, A: 255}).
+				SetColor(giu.StyleColorHeader, color.RGBA{R: 40, G: 40, B: 40, A: 100}).
+				SetColor(giu.StyleColorHeaderHovered, color.RGBA{R: 60, G: 60, B: 60, A: 120}).
+				SetColor(giu.StyleColorHeaderActive, color.RGBA{R: 80, G: 80, B: 80, A: 140}).To(
+				giu.Selectable(processText).Selected(false).OnClick(func() {
+					app.selectedPID = proc.PID
+					app.selectedProcessName = proc.Name
+					app.showProcessDialog = false
+					app.processSearchText = ""
+					app.addLogLine(fmt.Sprintf("✅ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+				}),
 			)
 		}
 
