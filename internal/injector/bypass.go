@@ -2,6 +2,10 @@ package injector
 
 import (
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -80,34 +84,22 @@ func EraseEntryPoint(processHandle windows.Handle, baseAddress uintptr) error {
 }
 
 // ManualMapDLL loads DLL using manual mapping method
-func ManualMapDLL(processID uint32, dllBytes []byte, options BypassOptions) error {
+func ManualMapDLL(hProcess windows.Handle, dllBytes []byte) (uintptr, error) {
 	// 检查参数
-	if processID == 0 {
-		return fmt.Errorf("Process ID cannot be zero")
+	if hProcess == 0 {
+		return 0, fmt.Errorf("Process handle cannot be zero")
 	}
 
 	if len(dllBytes) == 0 {
-		return fmt.Errorf("DLL data cannot be empty")
+		return 0, fmt.Errorf("DLL data cannot be empty")
 	}
 
-	Printf("Starting manual mapping of DLL to process ID: %d, DLL size: %d bytes, using invisible memory: %v\n",
-		processID, len(dllBytes), options.InvisibleMemory)
-
-	// 打开目标进程
-	hProcess, err := windows.OpenProcess(windows.PROCESS_CREATE_THREAD|windows.PROCESS_VM_OPERATION|
-		windows.PROCESS_VM_WRITE|windows.PROCESS_VM_READ|windows.PROCESS_QUERY_INFORMATION,
-		false, processID)
-	if err != nil {
-		return fmt.Errorf("Failed to open target process: %v", err)
-	}
-	defer windows.CloseHandle(hProcess)
-
-	Printf("Successfully opened target process\n")
+	Printf("Starting manual mapping of DLL, DLL size: %d bytes\n", len(dllBytes))
 
 	// 解析PE头
 	peHeader, err := ParsePEHeader(dllBytes)
 	if err != nil {
-		return fmt.Errorf("Failed to parse PE header: %v", err)
+		return 0, fmt.Errorf("Failed to parse PE header: %v", err)
 	}
 
 	Printf("Successfully parsed PE header, image size: %d bytes\n", peHeader.OptionalHeader.SizeOfImage)
@@ -117,84 +109,94 @@ func ManualMapDLL(processID uint32, dllBytes []byte, options BypassOptions) erro
 
 	// 分配内存基址
 	var baseAddress uintptr
-	var memAllocErr error
 
-	if options.InvisibleMemory {
-		// 尝试在高地址空间分配内存，如果失败则尝试让系统自动选择地址
-		// 使用几个不同的高地址尝试
-		Printf("Attempting to allocate invisible memory in high address space...\n")
+	// 分配内存 - 简化版本
+	Printf("Allocating memory for DLL...\n")
+	baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
+		windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
+	if err != nil {
+		return 0, fmt.Errorf("Failed to allocate memory in target process: %v", err)
+	}
+	Printf("Successfully allocated memory at address 0x%X\n", baseAddress)
 
-		// 获取适合当前架构的高地址
-		var highAddresses []uintptr
-		if unsafe.Sizeof(uintptr(0)) == 8 {
-			// 64位系统 - 使用运行时计算避免编译时常量溢出
-			// 将计算分解为多个步骤，确保编译器无法在编译时预计算
-			shift := uint(28)
-			base1 := uint64(0x7FFF)
-			base2 := uint64(0x7FFE)
-			base3 := uint64(0x7FFD)
+	/*
+		if options.InvisibleMemory {
+			// 尝试在高地址空间分配内存，如果失败则尝试让系统自动选择地址
+			// 使用几个不同的高地址尝试
+			Printf("Attempting to allocate invisible memory in high address space...\n")
 
-			highAddresses = []uintptr{
-				uintptr(base1 << shift), // 0x7FFF0000000
-				uintptr(base2 << shift), // 0x7FFE0000000
-				uintptr(base3 << shift), // 0x7FFD0000000
-				0x70000000,
+			// 获取适合当前架构的高地址
+			var highAddresses []uintptr
+			if unsafe.Sizeof(uintptr(0)) == 8 {
+				// 64位系统 - 使用运行时计算避免编译时常量溢出
+				// 将计算分解为多个步骤，确保编译器无法在编译时预计算
+				shift := uint(28)
+				base1 := uint64(0x7FFF)
+				base2 := uint64(0x7FFE)
+				base3 := uint64(0x7FFD)
+
+				highAddresses = []uintptr{
+					uintptr(base1 << shift), // 0x7FFF0000000
+					uintptr(base2 << shift), // 0x7FFE0000000
+					uintptr(base3 << shift), // 0x7FFD0000000
+					0x70000000,
+				}
+			} else {
+				// 32位系统
+				highAddresses = []uintptr{0x70000000, 0x60000000, 0x50000000, 0x40000000}
+			}
+
+			for _, addr := range highAddresses {
+				Printf("Trying to allocate memory at address 0x%X...\n", addr)
+				baseAddress, memAllocErr = VirtualAllocEx(hProcess, addr, uintptr(imageSize),
+					windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
+				if memAllocErr == nil {
+					Printf("Successfully allocated memory at address 0x%X\n", baseAddress)
+					break // 成功分配了内存
+				}
+				Printf("Failed to allocate at 0x%X: %v\n", addr, memAllocErr)
+			}
+
+			// 如果所有高地址都失败，尝试让系统自动选择
+			if memAllocErr != nil {
+				Printf("Failed to allocate memory in high address space, letting system choose address...\n")
+				baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
+					windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
+				if err != nil {
+					return 0, fmt.Errorf("Failed to allocate memory in target process: %v", err)
+				}
+				Printf("System selected address: 0x%X\n", baseAddress)
 			}
 		} else {
-			// 32位系统
-			highAddresses = []uintptr{0x70000000, 0x60000000, 0x50000000, 0x40000000}
-		}
+			// 正常分配内存，让系统自动选择地址
+			Printf("Letting system choose memory address...\n")
 
-		for _, addr := range highAddresses {
-			Printf("Trying to allocate memory at address 0x%X...\n", addr)
-			baseAddress, memAllocErr = VirtualAllocEx(hProcess, addr, uintptr(imageSize),
-				windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
-			if memAllocErr == nil {
-				Printf("Successfully allocated memory at address 0x%X\n", baseAddress)
-				break // 成功分配了内存
+			// 添加详细的调试信息
+			Printf("Process handle: 0x%X\n", hProcess)
+			Printf("Image size: %d bytes (0x%X)\n", imageSize, imageSize)
+
+			// 验证imageSize是否合理
+			if imageSize == 0 {
+				return 0, fmt.Errorf("Invalid image size: %d", imageSize)
 			}
-			Printf("Failed to allocate at 0x%X: %v\n", addr, memAllocErr)
-		}
+			if imageSize > 0x10000000 { // 256MB限制
+				return 0, fmt.Errorf("Image size too large: %d bytes", imageSize)
+			}
 
-		// 如果所有高地址都失败，尝试让系统自动选择
-		if memAllocErr != nil {
-			Printf("Failed to allocate memory in high address space, letting system choose address...\n")
 			baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
 				windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
 			if err != nil {
-				return fmt.Errorf("Failed to allocate memory in target process: %v", err)
+				return 0, fmt.Errorf("Failed to allocate memory in target process (size: %d): %v", imageSize, err)
 			}
-			Printf("System selected address: 0x%X\n", baseAddress)
+			Printf("System allocated memory at address: 0x%X\n", baseAddress)
 		}
-	} else {
-		// 正常分配内存，让系统自动选择地址
-		Printf("Letting system choose memory address...\n")
-
-		// 添加详细的调试信息
-		Printf("Process handle: 0x%X\n", hProcess)
-		Printf("Image size: %d bytes (0x%X)\n", imageSize, imageSize)
-
-		// 验证imageSize是否合理
-		if imageSize == 0 {
-			return fmt.Errorf("Invalid image size: %d", imageSize)
-		}
-		if imageSize > 0x10000000 { // 256MB限制
-			return fmt.Errorf("Image size too large: %d bytes", imageSize)
-		}
-
-		baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
-			windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
-		if err != nil {
-			return fmt.Errorf("Failed to allocate memory in target process (size: %d): %v", imageSize, err)
-		}
-		Printf("System allocated memory at address: 0x%X\n", baseAddress)
-	}
+	*/
 
 	// 映射PE文件各节到远程进程内存
 	Printf("Starting to map PE sections to remote process memory...\n")
 	err = MapSections(hProcess, dllBytes, baseAddress, peHeader)
 	if err != nil {
-		return fmt.Errorf("Failed to map PE sections: %v", err)
+		return 0, fmt.Errorf("Failed to map PE sections: %v", err)
 	}
 	Printf("Successfully mapped PE sections\n")
 
@@ -202,7 +204,7 @@ func ManualMapDLL(processID uint32, dllBytes []byte, options BypassOptions) erro
 	Printf("Starting to fix import table...\n")
 	err = FixImports(hProcess, baseAddress, peHeader)
 	if err != nil {
-		return fmt.Errorf("Failed to fix import table: %v", err)
+		return 0, fmt.Errorf("Failed to fix import table: %v", err)
 	}
 	Printf("Successfully fixed import table\n")
 
@@ -210,7 +212,7 @@ func ManualMapDLL(processID uint32, dllBytes []byte, options BypassOptions) erro
 	Printf("Starting to fix relocations...\n")
 	err = FixRelocations(hProcess, baseAddress, peHeader)
 	if err != nil {
-		return fmt.Errorf("Failed to fix relocations: %v", err)
+		return 0, fmt.Errorf("Failed to fix relocations: %v", err)
 	}
 	Printf("Successfully fixed relocations\n")
 
@@ -218,45 +220,14 @@ func ManualMapDLL(processID uint32, dllBytes []byte, options BypassOptions) erro
 	Printf("Starting to execute DLL entry point...\n")
 	err = ExecuteDllEntry(hProcess, baseAddress, peHeader)
 	if err != nil {
-		return fmt.Errorf("Failed to execute DLL entry point: %v", err)
+		return 0, fmt.Errorf("Failed to execute DLL entry point: %v", err)
 	}
 	Printf("Successfully executed DLL entry point\n")
 
-	// 应用反检测技术
-	if options.ErasePEHeader {
-		Printf("Erasing PE header for stealth...\n")
-		err = ErasePEHeader(hProcess, baseAddress)
-		if err != nil {
-			Printf("Warning: Failed to erase PE header: %v\n", err)
-			// 不返回错误，因为这不是关键操作
-		} else {
-			Printf("Successfully erased PE header\n")
-		}
-	}
-
-	if options.EraseEntryPoint {
-		Printf("Erasing entry point for stealth...\n")
-		err = EraseEntryPoint(hProcess, baseAddress)
-		if err != nil {
-			Printf("Warning: Failed to erase entry point: %v\n", err)
-			// 不返回错误，因为这不是关键操作
-		} else {
-			Printf("Successfully erased entry point\n")
-		}
-	}
-
-	// 应用高级反检测技术
-	Printf("Applying advanced bypass options...\n")
-	err = ApplyAdvancedBypassOptions(hProcess, baseAddress, uintptr(imageSize), options)
-	if err != nil {
-		Printf("Warning: Failed to apply advanced bypass options: %v\n", err)
-		// 不返回错误，因为这不是关键操作
-	} else {
-		Printf("Successfully applied advanced bypass options\n")
-	}
+	// 应用高级反检测技术已移除，因为需要options参数
 
 	Printf("Manual mapping of DLL completed, base address: 0x%X\n", baseAddress)
-	return nil
+	return baseAddress, nil
 }
 
 // FindLegitProcess 查找合法进程进行注入
@@ -370,4 +341,102 @@ func FindLegitProcess() (uint32, string, error) {
 	}
 
 	return targetPID, targetName, nil
+}
+
+// LegitimateProcessInjection performs injection through a legitimate process
+func LegitimateProcessInjection(hProcess windows.Handle, dllBytes []byte) error {
+	Printf("Starting legitimate process injection\n")
+
+	// Find a legitimate process to use as intermediary
+	legitPID, legitName, err := FindLegitProcess()
+	if err != nil {
+		return fmt.Errorf("failed to find legitimate process: %v", err)
+	}
+
+	Printf("Using legitimate process: %s (PID: %d)\n", legitName, legitPID)
+
+	// Open legitimate process
+	legitHandle, err := windows.OpenProcess(
+		windows.PROCESS_CREATE_THREAD|
+			windows.PROCESS_VM_OPERATION|
+			windows.PROCESS_VM_WRITE|
+			windows.PROCESS_VM_READ|
+			windows.PROCESS_QUERY_INFORMATION,
+		false, legitPID)
+	if err != nil {
+		return fmt.Errorf("failed to open legitimate process: %v", err)
+	}
+	defer windows.CloseHandle(legitHandle)
+
+	// First inject into legitimate process using standard method
+	// Create temporary DLL file
+	tempFile, err := createTempDllFile(dllBytes)
+	if err != nil {
+		return fmt.Errorf("failed to create temp DLL file: %v", err)
+	}
+	defer os.Remove(tempFile)
+
+	// Allocate memory in legitimate process for DLL path
+	dllPathBytes := []byte(tempFile + "\x00")
+	pathSize := len(dllPathBytes)
+
+	memAddr, err := VirtualAllocEx(legitHandle, 0, uintptr(pathSize),
+		windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_READWRITE)
+	if err != nil {
+		return fmt.Errorf("failed to allocate memory in legitimate process: %v", err)
+	}
+
+	// Write DLL path to legitimate process
+	var bytesWritten uintptr
+	err = WriteProcessMemory(legitHandle, memAddr, unsafe.Pointer(&dllPathBytes[0]),
+		uintptr(pathSize), &bytesWritten)
+	if err != nil {
+		return fmt.Errorf("failed to write DLL path to legitimate process: %v", err)
+	}
+
+	// Get LoadLibraryA address
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	loadLibraryA := kernel32.NewProc("LoadLibraryA")
+	loadLibraryAddr := loadLibraryA.Addr()
+
+	// Create remote thread in legitimate process
+	var threadID uint32
+	threadHandle, err := CreateRemoteThread(legitHandle, nil, 0,
+		loadLibraryAddr, memAddr, 0, &threadID)
+	if err != nil {
+		return fmt.Errorf("failed to create remote thread in legitimate process: %v", err)
+	}
+	defer windows.CloseHandle(threadHandle)
+
+	// Wait for injection to complete
+	waitResult, err := windows.WaitForSingleObject(threadHandle, 5000)
+	if err != nil {
+		return fmt.Errorf("failed to wait for legitimate process injection: %v", err)
+	}
+
+	if waitResult == uint32(windows.WAIT_TIMEOUT) {
+		return fmt.Errorf("legitimate process injection timed out")
+	}
+
+	Printf("Successfully injected DLL into legitimate process\n")
+
+	// Now the DLL should be running in the legitimate process
+	// and can be used to inject into the target process through
+	// less suspicious means
+
+	return nil
+}
+
+// Helper function to create temp DLL file
+func createTempDllFile(dllBytes []byte) (string, error) {
+	tempDir := os.TempDir()
+	fileName := fmt.Sprintf("temp_dll_%d.dll", time.Now().UnixNano())
+	tempFile := filepath.Join(tempDir, fileName)
+
+	err := ioutil.WriteFile(tempFile, dllBytes, 0644)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temporary DLL file: %v", err)
+	}
+
+	return tempFile, nil
 }

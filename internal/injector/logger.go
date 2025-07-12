@@ -4,6 +4,14 @@ import (
 	"fmt"
 )
 
+// Logger interface defines the logging methods
+type Logger interface {
+	Info(msg string, fields ...interface{})
+	Warn(msg string, fields ...interface{})
+	Error(msg string, fields ...interface{})
+	Debug(msg string, fields ...interface{})
+}
+
 // SilentLogger discards all output (for when no logger is set)
 type SilentLogger struct{}
 
