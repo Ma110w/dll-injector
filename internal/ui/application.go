@@ -74,17 +74,17 @@ type Application struct {
 	stealthyThreads      bool
 
 	// UI state
-	showAboutDialog      bool
-	showHelpDialog       bool
-	showConfirmDialog    bool
-	showProgressDialog   bool
-	showSuccessDialog    bool
-	showProcessDialog    bool  // Process selection dialog
-	confirmDialogText    string
-	progressText         string
-	successText          string
-	selectedTab          int32 // 0=Basic, 1=Advanced, 2=Preset
-	processSearchText    string // Search text for process dialog
+	showAboutDialog    bool
+	showHelpDialog     bool
+	showConfirmDialog  bool
+	showProgressDialog bool
+	showSuccessDialog  bool
+	showProcessDialog  bool // Process selection dialog
+	confirmDialogText  string
+	progressText       string
+	successText        string
+	selectedTab        int32  // 0=Basic, 1=Advanced, 2=Preset
+	processSearchText  string // Search text for process dialog
 
 	// Mutex for thread safety
 	mu sync.RWMutex
@@ -315,8 +315,8 @@ func (app *Application) Run() error {
 	app.logger.Info("Master window created, starting main loop...")
 
 	// Add initial log entry
-	app.addLogLine("🚀 DLL Injector started")
-	app.addLogLine("📋 Click 'Select Process' to choose target process")
+	app.addLogLine("DLL Injector started")
+	app.addLogLine("Click 'Select Process' to choose target process")
 
 	// Run the main loop
 	wnd.Run(app.loop)
@@ -384,7 +384,7 @@ func (app *Application) buildTopRow() giu.Widget {
 				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 					giu.Button("Browse").Size(80, 0).OnClick(func() {
-						app.addLogLine("📁 Opening Windows file dialog...")
+						app.addLogLine("Opening Windows file dialog...")
 						go app.openNativeFileDialog()
 					}),
 				),
@@ -404,7 +404,7 @@ func (app *Application) buildTopRow() giu.Widget {
 				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 					giu.Button("Select Process").OnClick(func() {
-						app.addLogLine("🔍 Opening process selection...")
+						app.addLogLine("Opening process selection...")
 						app.refreshProcessList()
 						app.showProcessDialog = true
 					}),
@@ -426,28 +426,28 @@ func (app *Application) buildInjectionMethodSection() giu.Widget {
 			giu.Style().SetColor(giu.StyleColorCheckMark, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
 				giu.RadioButton("Standard Injection", app.injectionMethod == 0).OnChange(func() {
 					app.injectionMethod = 0
-					app.addLogLine("✓ Injection method selected: Standard Injection")
+					app.addLogLine("Injection method selected: Standard Injection")
 				}),
 			),
 			giu.RadioButton("SetWindowsHookEx", app.injectionMethod == 1).OnChange(func() {
 				app.injectionMethod = 1
-				app.addLogLine("✓ Injection method selected: SetWindowsHookEx")
+				app.addLogLine("Injection method selected: SetWindowsHookEx")
 			}),
 			giu.RadioButton("QueueUserAPC", app.injectionMethod == 2).OnChange(func() {
 				app.injectionMethod = 2
-				app.addLogLine("✓ Injection method selected: QueueUserAPC")
+				app.addLogLine("Injection method selected: QueueUserAPC")
 			}),
 			giu.RadioButton("Early Bird", app.injectionMethod == 3).OnChange(func() {
 				app.injectionMethod = 3
-				app.addLogLine("✓ Injection method selected: Early Bird")
+				app.addLogLine("Injection method selected: Early Bird")
 			}),
 			giu.RadioButton("DLL Notification", app.injectionMethod == 4).OnChange(func() {
 				app.injectionMethod = 4
-				app.addLogLine("✓ Injection method selected: DLL Notification")
+				app.addLogLine("Injection method selected: DLL Notification")
 			}),
 			giu.RadioButton("Job Object", app.injectionMethod == 5).OnChange(func() {
 				app.injectionMethod = 5
-				app.addLogLine("✓ Injection method selected: Job Object")
+				app.addLogLine("Injection method selected: Job Object")
 			}),
 		),
 	)
@@ -567,7 +567,7 @@ func (app *Application) buildTabContent() giu.Widget {
 					app.manualMapping = true
 					app.peHeaderErasure = true
 					app.pathSpoofing = true
-					app.addLogLine("✓ Stealth mode preset applied")
+					app.addLogLine("Stealth mode preset applied")
 				}),
 				giu.Button("Maximum Evasion").Size(120, 30).OnClick(func() {
 					app.memoryLoad = true
@@ -577,11 +577,11 @@ func (app *Application) buildTabContent() giu.Widget {
 					app.pteSpoofing = true
 					app.vadManipulation = true
 					app.directSyscalls = true
-					app.addLogLine("✓ Maximum evasion preset applied")
+					app.addLogLine("Maximum evasion preset applied")
 				}),
 				giu.Button("Clear All").Size(120, 30).OnClick(func() {
 					app.clearAllOptions()
-					app.addLogLine("✓ All options cleared")
+					app.addLogLine("All options cleared")
 				}),
 			),
 		)
@@ -619,7 +619,7 @@ func (app *Application) buildConsoleLogsSection() giu.Widget {
 			),
 			giu.Dummy(-1, 0), // Push button to right
 			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
-				giu.Button("🏠").Size(25, 25).OnClick(func() {
+				giu.Button("Home").Size(50, 25).OnClick(func() {
 					// Home button functionality can be implemented here if needed
 				}),
 			),
@@ -654,17 +654,17 @@ func (app *Application) clearAllOptions() {
 // onInjectClicked handles the inject button click
 func (app *Application) onInjectClickedSimple() {
 	if app.selectedDllPath == "" {
-		app.addLogLine("❌ Error: No DLL file selected")
+		app.addLogLine("Error: No DLL file selected")
 		return
 	}
 
 	if app.selectedPID <= 0 {
-		app.addLogLine("❌ Error: No target process selected")
+		app.addLogLine("Error: No target process selected")
 		return
 	}
 
 	methodName := app.methodNames[app.injectionMethod]
-	app.addLogLine(fmt.Sprintf("🚀 Starting injection: %s -> PID %d using %s",
+	app.addLogLine(fmt.Sprintf("Starting injection: %s -> PID %d using %s",
 		filepath.Base(app.selectedDllPath), app.selectedPID, methodName))
 }
 
@@ -677,7 +677,7 @@ func (app *Application) buildProcessSelectionDialog() {
 	giu.Window("Select Target Process").
 		IsOpen(&app.showProcessDialog).
 		Size(900, 500).
-		Flags(giu.WindowFlagsNoResize|giu.WindowFlagsNoCollapse).
+		Flags(giu.WindowFlagsNoResize | giu.WindowFlagsNoCollapse).
 		Layout(
 			giu.Column(
 				// Header
@@ -695,7 +695,7 @@ func (app *Application) buildProcessSelectionDialog() {
 					giu.InputText(&app.processSearchText).Hint("Type process name, PID, or path...").Size(400),
 					giu.Button("Refresh List").OnClick(func() {
 						app.refreshProcessList()
-						app.addLogLine("🔄 Process list refreshed")
+						app.addLogLine("Process list refreshed")
 					}),
 				),
 				giu.Spacing(),
@@ -726,7 +726,7 @@ func (app *Application) buildProcessSelectionDialog() {
 						giu.Button("Cancel").Size(100, 30).OnClick(func() {
 							app.showProcessDialog = false
 							app.processSearchText = ""
-							app.addLogLine("❌ Process selection cancelled")
+							app.addLogLine("Process selection cancelled")
 						}),
 					),
 				),
@@ -833,15 +833,15 @@ func (app *Application) openNativeFileDialog() {
 	// Use Windows GetOpenFileName API
 	filename, err := app.showWindowsFileDialog()
 	if err != nil {
-		app.addLogLine(fmt.Sprintf("❌ Error opening file dialog: %v", err))
+		app.addLogLine(fmt.Sprintf("Error opening file dialog: %v", err))
 		return
 	}
 
 	if filename != "" {
 		app.selectedDllPath = filename
-		app.addLogLine(fmt.Sprintf("✅ DLL file selected: %s", filepath.Base(filename)))
+		app.addLogLine(fmt.Sprintf("DLL file selected: %s", filepath.Base(filename)))
 	} else {
-		app.addLogLine("❌ File selection cancelled")
+		app.addLogLine("File selection cancelled")
 	}
 }
 
@@ -976,12 +976,12 @@ func (app *Application) buildProcessTable() giu.Widget {
 					giu.Label(execPath),
 					giu.Dummy(200, 0),
 					giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
-						giu.Button("✓ Selected").OnClick(func() {
+						giu.Button("Selected").OnClick(func() {
 							app.selectedPID = proc.PID
 							app.selectedProcessName = proc.Name
 							app.showProcessDialog = false
 							app.processSearchText = "" // Clear search
-							app.addLogLine(fmt.Sprintf("✓ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+							app.addLogLine(fmt.Sprintf("Process selected: %s (PID: %d)", proc.Name, proc.PID))
 						}),
 					),
 				),
@@ -1000,7 +1000,7 @@ func (app *Application) buildProcessTable() giu.Widget {
 						app.selectedProcessName = proc.Name
 						app.showProcessDialog = false
 						app.processSearchText = "" // Clear search
-						app.addLogLine(fmt.Sprintf("✓ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+						app.addLogLine(fmt.Sprintf("Process selected: %s (PID: %d)", proc.Name, proc.PID))
 					}),
 				),
 			)
