@@ -277,8 +277,8 @@ func (app *Application) loop() {
 		),
 	)
 
-	// Render dialogs
-	app.buildProcessSelectionDialog()
+	// TODO: Render dialogs
+	// app.buildProcessSelectionDialog()
 }
 
 // buildTopRow builds the top row with DLL File and Target Process
@@ -319,9 +319,13 @@ func (app *Application) buildTopRow() giu.Widget {
 				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 					giu.Button("Select Process").OnClick(func() {
-						fmt.Println("Opening process selection dialog")
-						app.refreshProcessList() // Refresh process list before showing dialog
-						app.showProcessDialog = true
+						// Simple test - just select a dummy process for now
+						app.selectedPID = 1234
+						app.selectedProcessName = "notepad.exe"
+						app.addLogLine("✓ Process selected: notepad.exe (PID: 1234)")
+
+						// TODO: Implement proper process selection dialog
+						// For now, we'll use a simple hardcoded selection
 					}),
 				),
 			),
@@ -597,43 +601,66 @@ func (app *Application) buildProcessSelectionDialog() {
 		return
 	}
 
-	giu.PopupModal("Select Target Process").IsOpen(&app.showProcessDialog).Layout(
+	fmt.Println("=== BUILDING PROCESS SELECTION DIALOG ===")
+
+	giu.Window("Select Target Process").IsOpen(&app.showProcessDialog).Size(800, 600).Layout(
 		giu.Column(
+			// Simple test content first
+			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 255, G: 255, B: 255, A: 255}).To(
+				giu.Label("Process Selection Dialog"),
+			),
+			giu.Separator(),
+			giu.Spacing(),
+
 			// Search section
 			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
 				giu.Label("Search Processes:"),
 			),
-			giu.Row(
-				giu.Style().SetColor(giu.StyleColorFrameBg, color.RGBA{R: 50, G: 50, B: 50, A: 255}).To(
-					giu.InputText(&app.processSearchText).Hint("Type to search processes...").Size(600),
-				),
-				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
-					giu.Button("Refresh").Size(80, 0).OnClick(func() {
-						app.refreshProcessList()
-						fmt.Println("Process list refreshed")
-					}),
-				),
-			),
+			giu.InputText(&app.processSearchText).Hint("Type to search processes..."),
 			giu.Spacing(),
 
-			// Process list
+			// Simple process list for now
 			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
 				giu.Label("Available Processes:"),
 			),
 			giu.Separator(),
 
-			// Process table in a child window for scrolling
-			giu.Child().Size(-1, 400).Layout(
-				app.buildProcessTable(),
+			// Test process entries
+			giu.Row(
+				giu.Label("1234 - notepad.exe"),
+				giu.Button("Select").OnClick(func() {
+					app.selectedPID = 1234
+					app.selectedProcessName = "notepad.exe"
+					app.showProcessDialog = false
+					app.addLogLine("✓ Process selected: notepad.exe (PID: 1234)")
+					fmt.Println("Test process selected")
+				}),
+			),
+			giu.Row(
+				giu.Label("5678 - chrome.exe"),
+				giu.Button("Select").OnClick(func() {
+					app.selectedPID = 5678
+					app.selectedProcessName = "chrome.exe"
+					app.showProcessDialog = false
+					app.addLogLine("✓ Process selected: chrome.exe (PID: 5678)")
+					fmt.Println("Test process selected")
+				}),
 			),
 
 			giu.Spacing(),
 			// Dialog buttons
 			giu.Row(
+				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
+					giu.Button("Refresh").OnClick(func() {
+						app.refreshProcessList()
+						fmt.Println("Process list refreshed")
+					}),
+				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
-					giu.Button("Cancel").Size(100, 30).OnClick(func() {
+					giu.Button("Cancel").OnClick(func() {
 						app.showProcessDialog = false
 						app.processSearchText = "" // Clear search
+						fmt.Println("Dialog cancelled")
 					}),
 				),
 			),
