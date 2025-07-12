@@ -654,18 +654,18 @@ func (app *GuiApplication) performInjection() {
 
 		// Set anti-detection options
 		options := injector.BypassOptions{
-			MemoryLoad:             app.memoryLoad,
-			ErasePEHeader:          app.peHeaderErasure,
-			EraseEntryPoint:        app.entryPointErase,
-			ManualMapping:          app.manualMapping,
-			InvisibleMemory:        app.invisibleMemory,
-			PathSpoofing:           app.pathSpoofing,
-			LegitProcessInjection:  app.legitProcessInjection,
-			PTESpoofing:            app.pteSpoofing,
-			VADManipulation:        app.vadManipulation,
-			RemoveVADNode:          app.removeVADNode,
-			AllocBehindThreadStack: app.allocBehindThreadStack,
-			DirectSyscalls:         app.directSyscalls,
+			MemoryLoad:            app.memoryLoad,
+			ErasePEHeader:         app.peHeaderErasure,
+			EraseEntryPoint:       app.entryPointErase,
+			ManualMapping:         app.manualMapping,
+			InvisibleMemory:       app.invisibleMemory,
+			PathSpoofing:          app.pathSpoofing,
+			LegitProcessInjection: app.legitProcessInjection,
+			PTESpoofing:           app.pteSpoofing,
+			VADManipulation:       app.vadManipulation,
+			RemoveVADNode:         app.removeVADNode,
+			ThreadStackAllocation: app.allocBehindThreadStack,
+			DirectSyscalls:        app.directSyscalls,
 		}
 		inj.SetBypassOptions(options)
 
