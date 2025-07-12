@@ -246,78 +246,75 @@ func (app *Application) Log() *zap.Logger {
 
 // loop is the main UI loop
 func (app *Application) loop() {
-	// Main window with proper layout matching the screenshot
+	// Main window with exact layout matching the screenshot
 	giu.SingleWindow().Layout(
-		giu.Column(
-			// DLL File Selection Section
-			app.buildDllFileSection(),
-			giu.Spacing(),
+		giu.Style().SetStyle(giu.StyleVarWindowPadding, 15, 15).To(
+			giu.Column(
+				// Top row: DLL File and Target Process
+				app.buildTopRow(),
+				giu.Spacing(),
+				giu.Spacing(),
 
-			// Target Process Section
-			app.buildTargetProcessSection(),
-			giu.Spacing(),
+				// Injection Method Section
+				app.buildInjectionMethodSection(),
+				giu.Spacing(),
+				giu.Spacing(),
 
-			// Injection Method Section
-			app.buildInjectionMethodSection(),
-			giu.Spacing(),
+				// Anti-Detection Options Section
+				app.buildAntiDetectionSection(),
+				giu.Spacing(),
+				giu.Spacing(),
 
-			// Anti-Detection Options Section
-			app.buildAntiDetectionSection(),
-			giu.Spacing(),
+				// Inject Button
+				app.buildInjectButton(),
+				giu.Spacing(),
 
-			// Inject Button
-			app.buildInjectButton(),
-			giu.Spacing(),
-
-			// Console Logs Section
-			app.buildConsoleLogsSection(),
-		),
-	)
-}
-
-// buildDllFileSection builds the DLL file selection section
-func (app *Application) buildDllFileSection() giu.Widget {
-	return giu.Style().SetStyle(giu.StyleVarFramePadding, 8, 8).To(
-		giu.Column(
-			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 180, G: 180, B: 180, A: 255}).To(
-				giu.Label("DLL File:"),
-			),
-			giu.Spacing(),
-			giu.Row(
-				giu.Style().SetColor(giu.StyleColorFrameBg, color.RGBA{R: 45, G: 45, B: 45, A: 255}).To(
-					giu.InputText(&app.selectedDllPath).Hint("Select DLL file path...").Size(750),
-				),
-				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 70, G: 70, B: 70, A: 255}).To(
-					giu.Button("📁").Size(35, 0).OnClick(func() {
-						fmt.Println("Browse button clicked - please select DLL file manually")
-					}),
-				),
+				// Console Logs Section
+				app.buildConsoleLogsSection(),
 			),
 		),
 	)
 }
 
-// buildTargetProcessSection builds the target process selection section
-func (app *Application) buildTargetProcessSection() giu.Widget {
+// buildTopRow builds the top row with DLL File and Target Process
+func (app *Application) buildTopRow() giu.Widget {
 	processText := "No Process Selected"
 	if app.selectedPID > 0 {
 		processText = fmt.Sprintf("PID: %d - %s", app.selectedPID, app.selectedProcessName)
 	}
 
-	return giu.Style().SetStyle(giu.StyleVarFramePadding, 8, 8).To(
+	return giu.Row(
+		// Left side - DLL File
 		giu.Column(
-			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 180, G: 180, B: 180, A: 255}).To(
+			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
+				giu.Label("DLL File:"),
+			),
+			giu.Row(
+				giu.Style().SetColor(giu.StyleColorFrameBg, color.RGBA{R: 50, G: 50, B: 50, A: 255}).To(
+					giu.InputText(&app.selectedDllPath).Hint("Select DLL file path...").Size(400),
+				),
+				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
+					giu.Button("📁").Size(30, 0).OnClick(func() {
+						fmt.Println("Browse DLL file")
+					}),
+				),
+			),
+		),
+
+		giu.Dummy(50, 0), // Spacer
+
+		// Right side - Target Process
+		giu.Column(
+			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
 				giu.Label("Target Process:"),
 			),
-			giu.Spacing(),
 			giu.Row(
-				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 150, G: 150, B: 150, A: 255}).To(
+				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 140, G: 140, B: 140, A: 255}).To(
 					giu.Label(processText),
 				),
-				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 70, G: 70, B: 70, A: 255}).To(
+				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 					giu.Button("Select Process").OnClick(func() {
-						fmt.Println("Select Process button clicked")
-						// For now, simulate selecting a process
+						fmt.Println("Select Process clicked")
 						app.selectedPID = 1234
 						app.selectedProcessName = "notepad.exe"
 					}),
@@ -329,164 +326,222 @@ func (app *Application) buildTargetProcessSection() giu.Widget {
 
 // buildInjectionMethodSection builds the injection method selection section
 func (app *Application) buildInjectionMethodSection() giu.Widget {
-	return giu.Style().SetStyle(giu.StyleVarFramePadding, 8, 8).To(
-		giu.Column(
-			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 180, G: 180, B: 180, A: 255}).To(
-				giu.Label("Injection Method:"),
-			),
-			giu.Spacing(),
-			giu.Row(
-				giu.Style().SetColor(giu.StyleColorCheckMark, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
-					giu.RadioButton("Standard Injection", app.injectionMethod == 0).OnChange(func() {
-						app.injectionMethod = 0
-						fmt.Println("Injection method selected: Standard Injection")
-					}),
-				),
-				giu.RadioButton("SetWindowsHookEx", app.injectionMethod == 1).OnChange(func() {
-					app.injectionMethod = 1
-					fmt.Println("Injection method selected: SetWindowsHookEx")
-				}),
-				giu.RadioButton("QueueUserAPC", app.injectionMethod == 2).OnChange(func() {
-					app.injectionMethod = 2
-					fmt.Println("Injection method selected: QueueUserAPC")
+	return giu.Column(
+		giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
+			giu.Label("Injection Method:"),
+		),
+		giu.Spacing(),
+		// Single row with all 6 radio buttons
+		giu.Row(
+			giu.Style().SetColor(giu.StyleColorCheckMark, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
+				giu.RadioButton("Standard Injection", app.injectionMethod == 0).OnChange(func() {
+					app.injectionMethod = 0
+					fmt.Println("✓ Injection method selected: Standard Injection")
 				}),
 			),
-			giu.Row(
-				giu.RadioButton("Early Bird", app.injectionMethod == 3).OnChange(func() {
-					app.injectionMethod = 3
-					fmt.Println("Injection method selected: Early Bird")
-				}),
-				giu.RadioButton("DLL Notification", app.injectionMethod == 4).OnChange(func() {
-					app.injectionMethod = 4
-					fmt.Println("Injection method selected: DLL Notification")
-				}),
-				giu.RadioButton("Job Object", app.injectionMethod == 5).OnChange(func() {
-					app.injectionMethod = 5
-					fmt.Println("Injection method selected: Job Object")
-				}),
-			),
+			giu.RadioButton("SetWindowsHookEx", app.injectionMethod == 1).OnChange(func() {
+				app.injectionMethod = 1
+				fmt.Println("✓ Injection method selected: SetWindowsHookEx")
+			}),
+			giu.RadioButton("QueueUserAPC", app.injectionMethod == 2).OnChange(func() {
+				app.injectionMethod = 2
+				fmt.Println("✓ Injection method selected: QueueUserAPC")
+			}),
+			giu.RadioButton("Early Bird", app.injectionMethod == 3).OnChange(func() {
+				app.injectionMethod = 3
+				fmt.Println("✓ Injection method selected: Early Bird")
+			}),
+			giu.RadioButton("DLL Notification", app.injectionMethod == 4).OnChange(func() {
+				app.injectionMethod = 4
+				fmt.Println("✓ Injection method selected: DLL Notification")
+			}),
+			giu.RadioButton("Job Object", app.injectionMethod == 5).OnChange(func() {
+				app.injectionMethod = 5
+				fmt.Println("✓ Injection method selected: Job Object")
+			}),
 		),
 	)
 }
 
-// buildAntiDetectionSection builds the anti-detection options section with tabs
+// buildAntiDetectionSection builds the anti-detection options section exactly like screenshot
 func (app *Application) buildAntiDetectionSection() giu.Widget {
 	return giu.Column(
-		giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 200, G: 200, B: 200, A: 255}).To(
-			giu.Label("🛡️ Anti-Detection Options"),
+		// Header with dropdown arrow
+		giu.Row(
+			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
+				giu.Label("🛡️ Anti-Detection Options"),
+			),
 		),
 		giu.Spacing(),
 
-		// Tab buttons
+		// Tab buttons - exactly like screenshot
 		giu.Row(
+			// Basic tab (active/blue)
 			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
-				giu.Button("Basic").Size(80, 25).OnClick(func() {
-					app.selectedTab = 0
+				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 255, G: 255, B: 255, A: 255}).To(
+					giu.Button("Basic").Size(60, 25).OnClick(func() {
+						app.selectedTab = 0
+						fmt.Println("Basic tab selected")
+					}),
+				),
+			),
+			// Advanced tab (inactive/gray)
+			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
+				giu.Button("Advanced").Size(80, 25).OnClick(func() {
+					app.selectedTab = 1
+					fmt.Println("Advanced tab selected")
 				}),
 			),
-			giu.Button("Advanced").Size(80, 25).OnClick(func() {
-				app.selectedTab = 1
-			}),
-			giu.Button("Preset").Size(80, 25).OnClick(func() {
-				app.selectedTab = 2
-			}),
+			// Preset tab (inactive/gray)
+			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
+				giu.Button("Preset").Size(60, 25).OnClick(func() {
+					app.selectedTab = 2
+					fmt.Println("Preset tab selected")
+				}),
+			),
 		),
 		giu.Spacing(),
 
-		// Tab content
+		// Tab content in 3-column layout like screenshot
 		app.buildTabContent(),
 	)
 }
 
-// buildTabContent builds the content for the selected tab
+// buildTabContent builds the content for the selected tab in 3-column layout like screenshot
 func (app *Application) buildTabContent() giu.Widget {
 	switch app.selectedTab {
-	case 0: // Basic
+	case 0: // Basic - exactly like screenshot
 		return giu.Column(
+			// First row of checkboxes
 			giu.Row(
-				giu.Checkbox("Memory Load", &app.memoryLoad),
-				giu.Checkbox("Manual Mapping", &app.manualMapping),
-				giu.Checkbox("Erase PE Header", &app.peHeaderErasure),
+				giu.Column(
+					giu.Checkbox("Memory Load", &app.memoryLoad),
+				),
+				giu.Dummy(120, 0), // Spacer
+				giu.Column(
+					giu.Checkbox("Manual Mapping", &app.manualMapping),
+				),
+				giu.Dummy(120, 0), // Spacer
+				giu.Column(
+					giu.Checkbox("Erase PE Header", &app.peHeaderErasure),
+				),
 			),
+			giu.Spacing(),
+			// Second row of checkboxes
 			giu.Row(
-				giu.Checkbox("Path Spoofing", &app.pathSpoofing),
-				giu.Checkbox("Legitimate Process", &app.legitProcessInjection),
-				giu.Checkbox("Erase Entry Point", &app.entryPointErase),
+				giu.Column(
+					giu.Checkbox("Path Spoofing", &app.pathSpoofing),
+				),
+				giu.Dummy(120, 0), // Spacer
+				giu.Column(
+					giu.Checkbox("Legitimate Process", &app.legitProcessInjection),
+				),
+				giu.Dummy(120, 0), // Spacer
+				giu.Column(
+					giu.Checkbox("Erase Entry Point", &app.entryPointErase),
+				),
 			),
 		)
 	case 1: // Advanced
 		return giu.Column(
 			giu.Row(
-				giu.Checkbox("PTE Spoofing", &app.pteSpoofing),
-				giu.Checkbox("VAD Manipulation", &app.vadManipulation),
-				giu.Checkbox("Remove VAD Node", &app.removeVADNode),
+				giu.Column(
+					giu.Checkbox("PTE Spoofing", &app.pteSpoofing),
+				),
+				giu.Dummy(120, 0),
+				giu.Column(
+					giu.Checkbox("VAD Manipulation", &app.vadManipulation),
+				),
+				giu.Dummy(120, 0),
+				giu.Column(
+					giu.Checkbox("Remove VAD Node", &app.removeVADNode),
+				),
 			),
+			giu.Spacing(),
 			giu.Row(
-				giu.Checkbox("Thread Stack Alloc", &app.allocBehindThreadStack),
-				giu.Checkbox("Direct Syscalls", &app.directSyscalls),
-				giu.Checkbox("Process Hollowing", &app.processHollowing),
+				giu.Column(
+					giu.Checkbox("Thread Stack Alloc", &app.allocBehindThreadStack),
+				),
+				giu.Dummy(120, 0),
+				giu.Column(
+					giu.Checkbox("Direct Syscalls", &app.directSyscalls),
+				),
+				giu.Dummy(120, 0),
+				giu.Column(
+					giu.Checkbox("Process Hollowing", &app.processHollowing),
+				),
 			),
 		)
 	case 2: // Preset
 		return giu.Column(
-			giu.Button("Stealth Mode").OnClick(func() {
-				app.memoryLoad = true
-				app.manualMapping = true
-				app.peHeaderErasure = true
-				app.pathSpoofing = true
-				fmt.Println("Stealth mode preset applied")
-			}),
-			giu.Button("Maximum Evasion").OnClick(func() {
-				app.memoryLoad = true
-				app.manualMapping = true
-				app.peHeaderErasure = true
-				app.pathSpoofing = true
-				app.pteSpoofing = true
-				app.vadManipulation = true
-				app.directSyscalls = true
-				fmt.Println("Maximum evasion preset applied")
-			}),
-			giu.Button("Clear All").OnClick(func() {
-				app.clearAllOptions()
-				fmt.Println("All options cleared")
-			}),
+			giu.Row(
+				giu.Button("Stealth Mode").Size(120, 30).OnClick(func() {
+					app.memoryLoad = true
+					app.manualMapping = true
+					app.peHeaderErasure = true
+					app.pathSpoofing = true
+					fmt.Println("✓ Stealth mode preset applied")
+				}),
+				giu.Button("Maximum Evasion").Size(120, 30).OnClick(func() {
+					app.memoryLoad = true
+					app.manualMapping = true
+					app.peHeaderErasure = true
+					app.pathSpoofing = true
+					app.pteSpoofing = true
+					app.vadManipulation = true
+					app.directSyscalls = true
+					fmt.Println("✓ Maximum evasion preset applied")
+				}),
+				giu.Button("Clear All").Size(120, 30).OnClick(func() {
+					app.clearAllOptions()
+					fmt.Println("✓ All options cleared")
+				}),
+			),
 		)
 	default:
 		return giu.Label("Unknown tab")
 	}
 }
 
-// buildInjectButton builds the main inject button
+// buildInjectButton builds the main inject button exactly like screenshot
 func (app *Application) buildInjectButton() giu.Widget {
 	return giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
 		giu.Style().SetColor(giu.StyleColorButtonHovered, color.RGBA{R: 0, G: 140, B: 230, A: 255}).To(
 			giu.Style().SetColor(giu.StyleColorButtonActive, color.RGBA{R: 0, G: 100, B: 180, A: 255}).To(
-				giu.Button("Inject").Size(-1, 50).OnClick(func() {
-					app.onInjectClickedSimple()
-				}),
+				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 255, G: 255, B: 255, A: 255}).To(
+					giu.Button("Inject").Size(-1, 45).OnClick(func() {
+						app.onInjectClickedSimple()
+					}),
+				),
 			),
 		),
 	)
 }
 
-// buildConsoleLogsSection builds the console logs section
+// buildConsoleLogsSection builds the console logs section exactly like screenshot
 func (app *Application) buildConsoleLogsSection() giu.Widget {
 	app.mu.RLock()
 	logText := app.logText
 	app.mu.RUnlock()
 
 	return giu.Column(
+		// Header row with Console Logs and home button
 		giu.Row(
-			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 200, G: 200, B: 200, A: 255}).To(
+			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
 				giu.Label("Console Logs"),
 			),
-			giu.Button("🏠").Size(25, 25).OnClick(func() {
-				fmt.Println("Home button clicked")
-			}),
+			giu.Dummy(-1, 0), // Push button to right
+			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
+				giu.Button("🏠").Size(25, 25).OnClick(func() {
+					fmt.Println("Home button clicked")
+				}),
+			),
 		),
-		giu.Style().SetColor(giu.StyleColorFrameBg, color.RGBA{R: 30, G: 30, B: 30, A: 255}).To(
-			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 200, G: 200, B: 200, A: 255}).To(
-				giu.InputTextMultiline(&logText).Size(-1, 150).Flags(giu.InputTextFlagsReadOnly),
+		giu.Spacing(),
+		// Console text area with dark background
+		giu.Style().SetColor(giu.StyleColorFrameBg, color.RGBA{R: 25, G: 25, B: 25, A: 255}).To(
+			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 180, G: 180, B: 180, A: 255}).To(
+				giu.InputTextMultiline(&logText).Size(-1, 120).Flags(giu.InputTextFlagsReadOnly),
 			),
 		),
 	)
