@@ -13,7 +13,6 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/whispin/dll-injector/internal/injector"
@@ -451,7 +450,7 @@ func NewApplication(title string, width, height int) *Application {
 		fyneApp:          fyneapp.New(),
 		title:            title,
 		width:            float32(width),
-		height:           float32(height + 250),
+		height:           float32(height),
 		processInfo:      process.NewInfo(),
 		selectedPID:      -1,
 		selectedDll:      binding.NewString(),
@@ -708,296 +707,8 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	// Create a simple card for the method selector
 	methodCard := NewCard(methodSelector, false)
 
-	// Anti-detection options - use collapsible panel design
-	bypassIcon := widget.NewIcon(theme.WarningIcon())
-	bypassTitleLabel := widget.NewLabelWithStyle("Anti-Detection Options", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-
-	bypassTitleContainer := container.NewHBox(
-		bypassIcon,
-		bypassTitleLabel,
-	)
-
-	// Create anti-detection options groups
-	// Loading method group
-
-	// Basic anti-detection options
-	app.bypassCheckboxes["Load DLL from Memory"] = widget.NewCheck("Load DLL from Memory", func(checked bool) {
-		app.memoryLoad = checked
-		app.updateBypassOptionsState()
-	})
-
-	app.bypassCheckboxes["Use Manual Mapping"] = widget.NewCheck("Use Manual Mapping", func(checked bool) {
-		app.manualMapping = checked
-
-		if checked {
-			app.memoryLoad = true
-			app.bypassCheckboxes["Load DLL from Memory"].SetChecked(true)
-		}
-
-		app.updateBypassOptionsState()
-	})
-
-	app.bypassCheckboxes["Path Spoofing"] = widget.NewCheck("Path Spoofing", func(checked bool) {
-		app.pathSpoofing = checked
-	})
-
-	// Use horizontal layout for options with compact spacing
-	loadingOptions := container.NewGridWithColumns(3,
-		app.bypassCheckboxes["Load DLL from Memory"],
-		app.bypassCheckboxes["Use Manual Mapping"],
-		app.bypassCheckboxes["Path Spoofing"],
-	)
-
-	loadingCard := ModernSection("Loading Method", loadingOptions)
-
-	// Memory operation group
-
-	// Memory operation options
-	app.bypassCheckboxes["Erase PE Header"] = widget.NewCheck("Erase PE Header", func(checked bool) {
-		app.peHeaderErasure = checked
-		// 移除日志记录，减少干扰
-	})
-
-	app.bypassCheckboxes["Erase Entry Point"] = widget.NewCheck("Erase Entry Point", func(checked bool) {
-		app.entryPointErase = checked
-	})
-
-	app.bypassCheckboxes["Map to Hidden Memory"] = widget.NewCheck("Map to Hidden Memory", func(checked bool) {
-		app.invisibleMemory = checked
-	})
-
-	// Use horizontal layout for options
-	memoryOptions := container.NewGridWithColumns(3,
-		app.bypassCheckboxes["Erase PE Header"],
-		app.bypassCheckboxes["Erase Entry Point"],
-		app.bypassCheckboxes["Map to Hidden Memory"],
-	)
-
-	memoryCard := ModernSection("Memory Operations", memoryOptions)
-
-	// Advanced techniques group
-
-	// Advanced anti-detection options
-	app.bypassCheckboxes["PTE Modification"] = widget.NewCheck("PTE Modification", func(checked bool) {
-		app.pteSpoofing = checked
-
-		if checked && app.vadManipulation {
-			app.vadManipulation = false
-			app.bypassCheckboxes["VAD Manipulation"].SetChecked(false)
-		}
-	})
-
-	app.bypassCheckboxes["VAD Manipulation"] = widget.NewCheck("VAD Manipulation", func(checked bool) {
-		app.vadManipulation = checked
-
-		if checked && app.pteSpoofing {
-			app.pteSpoofing = false
-			app.bypassCheckboxes["PTE Modification"].SetChecked(false)
-		}
-	})
-
-	app.bypassCheckboxes["Remove VAD Node"] = widget.NewCheck("Remove VAD Node", func(checked bool) {
-		app.removeVADNode = checked
-
-		if checked && !app.vadManipulation {
-			app.vadManipulation = true
-			app.bypassCheckboxes["VAD Manipulation"].SetChecked(true)
-
-			if app.vadManipulation && app.pteSpoofing {
-				app.pteSpoofing = false
-				app.bypassCheckboxes["PTE Modification"].SetChecked(false)
-			}
-		}
-	})
-
-	app.bypassCheckboxes["Allocate Behind Thread Stack"] = widget.NewCheck("Allocate Behind Thread Stack", func(checked bool) {
-		app.allocBehindThreadStack = checked
-	})
-
-	app.bypassCheckboxes["Direct Syscalls"] = widget.NewCheck("Direct Syscalls", func(checked bool) {
-		app.directSyscalls = checked
-	})
-
-	app.bypassCheckboxes["Use Legitimate Process"] = widget.NewCheck("Use Legitimate Process", func(checked bool) {
-		app.legitProcessInjection = checked
-	})
-
-	// First row of advanced options
-	advancedOptions1 := container.NewGridWithColumns(3,
-		app.bypassCheckboxes["PTE Modification"],
-		app.bypassCheckboxes["VAD Manipulation"],
-		app.bypassCheckboxes["Remove VAD Node"],
-	)
-
-	// Second row of advanced options
-	advancedOptions2 := container.NewGridWithColumns(3,
-		app.bypassCheckboxes["Allocate Behind Thread Stack"],
-		app.bypassCheckboxes["Direct Syscalls"],
-		app.bypassCheckboxes["Use Legitimate Process"],
-	)
-
-	// Enhanced advanced options title
-
-	// Memory options
-	app.bypassCheckboxes["Randomize Allocation"] = widget.NewCheck("Randomize Allocation", func(checked bool) {
-		app.randomizeAllocation = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Randomize Allocation"), zap.Bool("enabled", checked))
-	})
-
-	app.bypassCheckboxes["Memory Fluctuation"] = widget.NewCheck("Memory Fluctuation", func(checked bool) {
-		app.memoryFluctuation = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Memory Fluctuation"), zap.Bool("enabled", checked))
-	})
-
-	app.bypassCheckboxes["Multi-Stage Injection"] = widget.NewCheck("Multi-Stage Injection", func(checked bool) {
-		app.multiStageInjection = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Multi-Stage Injection"), zap.Bool("enabled", checked))
-	})
-
-	// First row of enhanced memory options
-	enhancedMemoryOptions := container.NewGridWithColumns(3,
-		app.bypassCheckboxes["Randomize Allocation"],
-		app.bypassCheckboxes["Memory Fluctuation"],
-		app.bypassCheckboxes["Multi-Stage Injection"],
-	)
-
-	// Thread options
-	app.bypassCheckboxes["Thread Hijacking"] = widget.NewCheck("Thread Hijacking", func(checked bool) {
-		app.threadHijacking = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Thread Hijacking"), zap.Bool("enabled", checked))
-
-		// Thread hijacking and stealthy threads are mutually exclusive
-		if checked && app.stealthyThreads {
-			app.stealthyThreads = false
-			app.bypassCheckboxes["Stealthy Threads"].SetChecked(false)
-		}
-	})
-
-	app.bypassCheckboxes["APC Queueing"] = widget.NewCheck("APC Queueing", func(checked bool) {
-		app.apcQueueing = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "APC Queueing"), zap.Bool("enabled", checked))
-	})
-
-	app.bypassCheckboxes["Stealthy Threads"] = widget.NewCheck("Stealthy Threads", func(checked bool) {
-		app.stealthyThreads = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Stealthy Threads"), zap.Bool("enabled", checked))
-
-		// Thread hijacking and stealthy threads are mutually exclusive
-		if checked && app.threadHijacking {
-			app.threadHijacking = false
-			app.bypassCheckboxes["Thread Hijacking"].SetChecked(false)
-		}
-	})
-
-	// Thread options row
-	enhancedThreadOptions := container.NewGridWithColumns(3,
-		app.bypassCheckboxes["Thread Hijacking"],
-		app.bypassCheckboxes["APC Queueing"],
-		app.bypassCheckboxes["Stealthy Threads"],
-	)
-
-	// Process options
-	app.bypassCheckboxes["Process Hollowing"] = widget.NewCheck("Process Hollowing", func(checked bool) {
-		app.processHollowing = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Process Hollowing"), zap.Bool("enabled", checked))
-
-		// Process hollowing and doppelganging are mutually exclusive
-		if checked && app.doppelgangingProcess {
-			app.doppelgangingProcess = false
-			app.bypassCheckboxes["Process Doppelganging"].SetChecked(false)
-		}
-	})
-
-	app.bypassCheckboxes["Process Doppelganging"] = widget.NewCheck("Process Doppelganging", func(checked bool) {
-		app.doppelgangingProcess = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Process Doppelganging"), zap.Bool("enabled", checked))
-
-		// Process hollowing and doppelganging are mutually exclusive
-		if checked && app.processHollowing {
-			app.processHollowing = false
-			app.bypassCheckboxes["Process Hollowing"].SetChecked(false)
-		}
-	})
-
-	app.bypassCheckboxes["Process Mirroring"] = widget.NewCheck("Process Mirroring", func(checked bool) {
-		app.processMirroring = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Process Mirroring"), zap.Bool("enabled", checked))
-	})
-
-	// Process options row
-	enhancedProcessOptions := container.NewGridWithColumns(3,
-		app.bypassCheckboxes["Process Hollowing"],
-		app.bypassCheckboxes["Process Doppelganging"],
-		app.bypassCheckboxes["Process Mirroring"],
-	)
-
-	// Anti-detection options
-	app.bypassCheckboxes["Anti-Debug Techniques"] = widget.NewCheck("Anti-Debug Techniques", func(checked bool) {
-		app.antiDebugTechniques = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Anti-Debug Techniques"), zap.Bool("enabled", checked))
-	})
-
-	app.bypassCheckboxes["Anti-VM Techniques"] = widget.NewCheck("Anti-VM Techniques", func(checked bool) {
-		app.antiVMTechniques = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Anti-VM Techniques"), zap.Bool("enabled", checked))
-	})
-
-	app.bypassCheckboxes["Delayed Execution"] = widget.NewCheck("Delayed Execution", func(checked bool) {
-		app.delayedExecution = checked
-		app.logger.Info("Enhanced option changed", zap.String("option", "Delayed Execution"), zap.Bool("enabled", checked))
-	})
-
-	// Anti-detection options row
-	enhancedAntiDetectionOptions := container.NewGridWithColumns(3,
-		app.bypassCheckboxes["Anti-Debug Techniques"],
-		app.bypassCheckboxes["Anti-VM Techniques"],
-		app.bypassCheckboxes["Delayed Execution"],
-	)
-
-	// Create ultra compact spacer for enhanced options
-	enhancedSpacerFunc := func() fyne.CanvasObject {
-		spacer := container.NewVBox()
-		spacer.Resize(fyne.NewSize(0, 1)) // Minimal spacing between enhanced option rows
-		return spacer
-	}
-
-	// Ultra compact enhanced options section
-	enhancedCard := ModernSection("Enhanced Options", container.NewVBox(
-		enhancedMemoryOptions,
-		enhancedSpacerFunc(),
-		enhancedThreadOptions,
-		enhancedSpacerFunc(),
-		enhancedProcessOptions,
-		enhancedSpacerFunc(),
-		enhancedAntiDetectionOptions,
-	))
-
-	// Ultra compact advanced options section
-	advancedCard := ModernSection("Advanced Options", container.NewVBox(
-		advancedOptions1,
-		enhancedSpacerFunc(),
-		advancedOptions2,
-		enhancedSpacerFunc(),
-		enhancedCard,
-	))
-
-	// Create ultra compact spacer for bypass options
-	bypassSpacerFunc := func() fyne.CanvasObject {
-		spacer := container.NewVBox()
-		spacer.Resize(fyne.NewSize(0, 1)) // Minimal spacing between bypass sections
-		return spacer
-	}
-
-	// Combine all anti-detection option cards with ultra compact spacing
-	bypassCard := container.NewVBox(
-		bypassTitleContainer,
-		bypassSpacerFunc(),
-		loadingCard,
-		bypassSpacerFunc(),
-		memoryCard,
-		bypassSpacerFunc(),
-		advancedCard,
-	)
+	// Anti-detection options - 重新设计为紧凑的标签页界面
+	bypassContainer := app.createCompactBypassOptions()
 
 	// Initial option state setup
 	app.updateBypassOptionsState()
@@ -1111,18 +822,6 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	})
 	injectButton.Importance = widget.HighImportance
 
-	// Make the inject button more prominent with modern styling
-	injectButton.Alignment = widget.ButtonAlignCenter
-
-	// Create a compact inject button container for VS Code style
-	injectButtonContainer := container.NewVBox(
-		container.NewHBox(
-			layout.NewSpacer(),
-			injectButton,
-			layout.NewSpacer(),
-		),
-	)
-
 	// Create ultra compact spacers for VS Code style layout
 	compactSpacer := func() fyne.CanvasObject {
 		spacer := container.NewVBox()
@@ -1130,21 +829,21 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 		return spacer
 	}
 
-	// Use scroll container to wrap all content with compact spacing
-	scrollContent := container.NewVBox(
+	// Use compact container without scroll - 内容现在应该适合窗口
+	content := container.NewVBox(
 		dllCard,
 		compactSpacer(),
 		processCard,
 		compactSpacer(),
 		methodCard,
 		compactSpacer(),
-		bypassCard,
+		bypassContainer,
 		compactSpacer(),
-		injectButtonContainer,
+		injectButton, // 直接使用按钮，不添加额外容器
 	)
 
-	// Return scrollable content
-	return container.NewScroll(scrollContent)
+	// Return content directly without scroll
+	return content
 }
 
 // updateBypassOptionsState 更新反检测选项的互斥状态
@@ -1870,5 +1569,382 @@ func (app *Application) Close() {
 
 	if app.mainWindow != nil {
 		app.mainWindow.Close()
+	}
+}
+
+// createCompactBypassOptions 创建超紧凑的反检测选项界面
+func (app *Application) createCompactBypassOptions() fyne.CanvasObject {
+	// 创建标题
+	titleLabel := widget.NewLabelWithStyle("🛡️ Anti-Detection Options", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+
+	// 创建超紧凑的标签页
+	tabs := container.NewAppTabs()
+	tabs.SetTabLocation(container.TabLocationTop)
+
+	// 基础选项标签页 - 使用更紧凑的布局
+	basicTab := app.createUltraCompactBasicTab()
+	tabs.Append(container.NewTabItem("基础", basicTab))
+
+	// 高级选项标签页
+	advancedTab := app.createUltraCompactAdvancedTab()
+	tabs.Append(container.NewTabItem("高级", advancedTab))
+
+	// 预设配置标签页
+	presetTab := app.createUltraCompactPresetTab()
+	tabs.Append(container.NewTabItem("预设", presetTab))
+
+	// 主容器 - 直接显示，不折叠
+	mainContainer := container.NewVBox(
+		titleLabel,
+		tabs,
+	)
+
+	return widget.NewCard("", "", mainContainer)
+}
+
+// createUltraCompactBasicTab 创建超紧凑的基础选项标签页
+func (app *Application) createUltraCompactBasicTab() fyne.CanvasObject {
+	// 初始化checkbox映射
+	if app.bypassCheckboxes == nil {
+		app.bypassCheckboxes = make(map[string]*widget.Check)
+	}
+
+	// 创建紧凑的checkbox，去掉多余的文字
+	app.bypassCheckboxes["Load DLL from Memory"] = widget.NewCheck("内存加载", func(checked bool) {
+		app.memoryLoad = checked
+		app.updateBypassOptionsState()
+	})
+
+	app.bypassCheckboxes["Use Manual Mapping"] = widget.NewCheck("手动映射", func(checked bool) {
+		app.manualMapping = checked
+		if checked {
+			app.memoryLoad = true
+			app.bypassCheckboxes["Load DLL from Memory"].SetChecked(true)
+		}
+		app.updateBypassOptionsState()
+	})
+
+	app.bypassCheckboxes["Erase PE Header"] = widget.NewCheck("擦除PE头", func(checked bool) {
+		app.peHeaderErasure = checked
+	})
+
+	app.bypassCheckboxes["Path Spoofing"] = widget.NewCheck("路径伪装", func(checked bool) {
+		app.pathSpoofing = checked
+	})
+
+	app.bypassCheckboxes["Use Legitimate Process"] = widget.NewCheck("合法进程", func(checked bool) {
+		app.legitProcessInjection = checked
+	})
+
+	app.bypassCheckboxes["Erase Entry Point"] = widget.NewCheck("擦除入口", func(checked bool) {
+		app.entryPointErase = checked
+	})
+
+	// 使用3列网格布局，最大化空间利用
+	return container.NewGridWithColumns(3,
+		app.bypassCheckboxes["Load DLL from Memory"],
+		app.bypassCheckboxes["Use Manual Mapping"],
+		app.bypassCheckboxes["Erase PE Header"],
+		app.bypassCheckboxes["Path Spoofing"],
+		app.bypassCheckboxes["Use Legitimate Process"],
+		app.bypassCheckboxes["Erase Entry Point"],
+	)
+}
+
+// createUltraCompactAdvancedTab 创建超紧凑的高级选项标签页
+func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
+	// 创建所有高级选项的checkbox
+	app.bypassCheckboxes["PTE Modification"] = widget.NewCheck("PTE修改", func(checked bool) {
+		app.pteSpoofing = checked
+		if checked && app.vadManipulation {
+			app.vadManipulation = false
+			app.bypassCheckboxes["VAD Manipulation"].SetChecked(false)
+		}
+	})
+
+	app.bypassCheckboxes["VAD Manipulation"] = widget.NewCheck("VAD操作", func(checked bool) {
+		app.vadManipulation = checked
+		if checked && app.pteSpoofing {
+			app.pteSpoofing = false
+			app.bypassCheckboxes["PTE Modification"].SetChecked(false)
+		}
+	})
+
+	app.bypassCheckboxes["Remove VAD Node"] = widget.NewCheck("移除VAD", func(checked bool) {
+		app.removeVADNode = checked
+		if checked && !app.vadManipulation {
+			app.vadManipulation = true
+			app.bypassCheckboxes["VAD Manipulation"].SetChecked(true)
+			if app.pteSpoofing {
+				app.pteSpoofing = false
+				app.bypassCheckboxes["PTE Modification"].SetChecked(false)
+			}
+		}
+	})
+
+	app.bypassCheckboxes["Direct Syscalls"] = widget.NewCheck("直接调用", func(checked bool) {
+		app.directSyscalls = checked
+	})
+
+	app.bypassCheckboxes["Allocate Behind Thread Stack"] = widget.NewCheck("线程栈", func(checked bool) {
+		app.allocBehindThreadStack = checked
+	})
+
+	app.bypassCheckboxes["Anti-Debug Techniques"] = widget.NewCheck("反调试", func(checked bool) {
+		app.antiDebugTechniques = checked
+	})
+
+	app.bypassCheckboxes["Anti-VM Techniques"] = widget.NewCheck("反虚拟机", func(checked bool) {
+		app.antiVMTechniques = checked
+	})
+
+	app.bypassCheckboxes["Process Hollowing"] = widget.NewCheck("进程挖空", func(checked bool) {
+		app.processHollowing = checked
+		if checked && app.doppelgangingProcess {
+			app.doppelgangingProcess = false
+			app.bypassCheckboxes["Process Doppelganging"].SetChecked(false)
+		}
+	})
+
+	app.bypassCheckboxes["Thread Hijacking"] = widget.NewCheck("线程劫持", func(checked bool) {
+		app.threadHijacking = checked
+		if checked && app.stealthyThreads {
+			app.stealthyThreads = false
+			app.bypassCheckboxes["Stealthy Threads"].SetChecked(false)
+		}
+	})
+
+	// 添加缺失的checkbox
+	app.bypassCheckboxes["Map to Hidden Memory"] = widget.NewCheck("隐藏内存", func(checked bool) {
+		app.invisibleMemory = checked
+	})
+
+	app.bypassCheckboxes["Process Doppelganging"] = widget.NewCheck("进程替身", func(checked bool) {
+		app.doppelgangingProcess = checked
+		if checked && app.processHollowing {
+			app.processHollowing = false
+			app.bypassCheckboxes["Process Hollowing"].SetChecked(false)
+		}
+	})
+
+	app.bypassCheckboxes["Process Mirroring"] = widget.NewCheck("进程镜像", func(checked bool) {
+		app.processMirroring = checked
+	})
+
+	app.bypassCheckboxes["APC Queueing"] = widget.NewCheck("APC队列", func(checked bool) {
+		app.apcQueueing = checked
+	})
+
+	app.bypassCheckboxes["Stealthy Threads"] = widget.NewCheck("隐蔽线程", func(checked bool) {
+		app.stealthyThreads = checked
+		if checked && app.threadHijacking {
+			app.threadHijacking = false
+			app.bypassCheckboxes["Thread Hijacking"].SetChecked(false)
+		}
+	})
+
+	app.bypassCheckboxes["Randomize Allocation"] = widget.NewCheck("随机分配", func(checked bool) {
+		app.randomizeAllocation = checked
+	})
+
+	app.bypassCheckboxes["Memory Fluctuation"] = widget.NewCheck("内存波动", func(checked bool) {
+		app.memoryFluctuation = checked
+	})
+
+	app.bypassCheckboxes["Multi-Stage Injection"] = widget.NewCheck("多阶段", func(checked bool) {
+		app.multiStageInjection = checked
+	})
+
+	app.bypassCheckboxes["Delayed Execution"] = widget.NewCheck("延迟执行", func(checked bool) {
+		app.delayedExecution = checked
+	})
+
+	// 使用3列网格布局，紧凑排列所有选项
+	return container.NewGridWithColumns(3,
+		app.bypassCheckboxes["PTE Modification"],
+		app.bypassCheckboxes["VAD Manipulation"],
+		app.bypassCheckboxes["Remove VAD Node"],
+		app.bypassCheckboxes["Direct Syscalls"],
+		app.bypassCheckboxes["Allocate Behind Thread Stack"],
+		app.bypassCheckboxes["Anti-Debug Techniques"],
+		app.bypassCheckboxes["Anti-VM Techniques"],
+		app.bypassCheckboxes["Process Hollowing"],
+		app.bypassCheckboxes["Thread Hijacking"],
+		app.bypassCheckboxes["Map to Hidden Memory"],
+		app.bypassCheckboxes["Process Doppelganging"],
+		app.bypassCheckboxes["Multi-Stage Injection"],
+	)
+}
+
+// createUltraCompactPresetTab 创建超紧凑的预设标签页
+func (app *Application) createUltraCompactPresetTab() fyne.CanvasObject {
+	// 预设配置按钮 - 使用更紧凑的文字
+	basicPresetBtn := widget.NewButton("🟢 基础", func() {
+		app.applyBasicPreset()
+	})
+	basicPresetBtn.Importance = widget.MediumImportance
+
+	advancedPresetBtn := widget.NewButton("🟡 高级", func() {
+		app.applyAdvancedPreset()
+	})
+	advancedPresetBtn.Importance = widget.MediumImportance
+
+	expertPresetBtn := widget.NewButton("🔴 专家", func() {
+		app.applyExpertPreset()
+	})
+	expertPresetBtn.Importance = widget.MediumImportance
+
+	clearAllBtn := widget.NewButton("🔄 清除", func() {
+		app.clearAllOptions()
+	})
+	clearAllBtn.Importance = widget.LowImportance
+
+	// 紧凑的说明文字
+	infoLabel := widget.NewLabel("快速应用预设配置:")
+	infoLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	// 使用2x2网格布局
+	buttonGrid := container.NewGridWithColumns(2,
+		basicPresetBtn,
+		advancedPresetBtn,
+		expertPresetBtn,
+		clearAllBtn,
+	)
+
+	return container.NewVBox(
+		infoLabel,
+		buttonGrid,
+	)
+}
+
+// applyBasicPreset 应用基础预设配置
+func (app *Application) applyBasicPreset() {
+	app.clearAllOptions()
+
+	// 基础隐蔽选项
+	app.memoryLoad = true
+	app.peHeaderErasure = true
+	app.pathSpoofing = true
+
+	// 更新UI
+	app.updateCheckboxStates()
+	app.updateBypassOptionsState()
+}
+
+// applyAdvancedPreset 应用高级预设配置
+func (app *Application) applyAdvancedPreset() {
+	app.clearAllOptions()
+
+	// 包含基础选项
+	app.memoryLoad = true
+	app.peHeaderErasure = true
+	app.pathSpoofing = true
+
+	// 高级选项
+	app.manualMapping = true
+	app.invisibleMemory = true
+	app.vadManipulation = true
+	app.antiDebugTechniques = true
+	app.directSyscalls = true
+
+	// 更新UI
+	app.updateCheckboxStates()
+	app.updateBypassOptionsState()
+}
+
+// applyExpertPreset 应用专家预设配置
+func (app *Application) applyExpertPreset() {
+	app.clearAllOptions()
+
+	// 包含高级选项
+	app.memoryLoad = true
+	app.peHeaderErasure = true
+	app.entryPointErase = true
+	app.manualMapping = true
+	app.invisibleMemory = true
+	app.vadManipulation = true
+	app.removeVADNode = true
+	app.antiDebugTechniques = true
+	app.antiVMTechniques = true
+	app.directSyscalls = true
+
+	// 专家级选项
+	app.processHollowing = true
+	app.threadHijacking = true
+	app.multiStageInjection = true
+	app.randomizeAllocation = true
+	app.memoryFluctuation = true
+	app.delayedExecution = true
+
+	// 更新UI
+	app.updateCheckboxStates()
+	app.updateBypassOptionsState()
+}
+
+// clearAllOptions 清除所有选项
+func (app *Application) clearAllOptions() {
+	// 重置所有布尔值
+	app.memoryLoad = false
+	app.peHeaderErasure = false
+	app.entryPointErase = false
+	app.manualMapping = false
+	app.invisibleMemory = false
+	app.pathSpoofing = false
+	app.legitProcessInjection = false
+	app.pteSpoofing = false
+	app.vadManipulation = false
+	app.removeVADNode = false
+	app.allocBehindThreadStack = false
+	app.directSyscalls = false
+	app.antiDebugTechniques = false
+	app.antiVMTechniques = false
+	app.processHollowing = false
+	app.doppelgangingProcess = false
+	app.processMirroring = false
+	app.threadHijacking = false
+	app.apcQueueing = false
+	app.stealthyThreads = false
+	app.randomizeAllocation = false
+	app.memoryFluctuation = false
+	app.multiStageInjection = false
+	app.delayedExecution = false
+
+	// 更新UI
+	app.updateCheckboxStates()
+}
+
+// updateCheckboxStates 更新所有checkbox的状态
+func (app *Application) updateCheckboxStates() {
+	checkboxMap := map[string]bool{
+		"Load DLL from Memory":         app.memoryLoad,
+		"Erase PE Header":              app.peHeaderErasure,
+		"Erase Entry Point":            app.entryPointErase,
+		"Use Manual Mapping":           app.manualMapping,
+		"Map to Hidden Memory":         app.invisibleMemory,
+		"Path Spoofing":                app.pathSpoofing,
+		"Use Legitimate Process":       app.legitProcessInjection,
+		"PTE Modification":             app.pteSpoofing,
+		"VAD Manipulation":             app.vadManipulation,
+		"Remove VAD Node":              app.removeVADNode,
+		"Allocate Behind Thread Stack": app.allocBehindThreadStack,
+		"Direct Syscalls":              app.directSyscalls,
+		"Anti-Debug Techniques":        app.antiDebugTechniques,
+		"Anti-VM Techniques":           app.antiVMTechniques,
+		"Process Hollowing":            app.processHollowing,
+		"Process Doppelganging":        app.doppelgangingProcess,
+		"Process Mirroring":            app.processMirroring,
+		"Thread Hijacking":             app.threadHijacking,
+		"APC Queueing":                 app.apcQueueing,
+		"Stealthy Threads":             app.stealthyThreads,
+		"Randomize Allocation":         app.randomizeAllocation,
+		"Memory Fluctuation":           app.memoryFluctuation,
+		"Multi-Stage Injection":        app.multiStageInjection,
+		"Delayed Execution":            app.delayedExecution,
+	}
+
+	for name, checked := range checkboxMap {
+		if checkbox, exists := app.bypassCheckboxes[name]; exists {
+			checkbox.SetChecked(checked)
+		}
 	}
 }
