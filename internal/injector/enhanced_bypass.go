@@ -167,9 +167,11 @@ func RandomizeMemoryAllocation(hProcess windows.Handle, size uintptr) (uintptr, 
 			}
 			addr := uintptr(*(*uint64)(unsafe.Pointer(&randomBytes[0])))
 			// Mask to reasonable range and align to page boundary
-			addr = (addr & 0x7FFFFFFFFFFF) & ^uintptr(0xFFF)
+			// Use runtime calculation to avoid compile-time constant overflow on 32-bit
+			maxAddr := uintptr(0x7FFF) << 32 | uintptr(0xFFFFFFFF)
+			addr = (addr & maxAddr) & ^uintptr(0xFFF)
 			// Avoid low memory and system reserved areas
-			if addr > 0x10000 && addr < 0x7FFFFFFFFFFF && addr != 0x7FFE0000 {
+			if addr > 0x10000 && addr < maxAddr && addr != 0x7FFE0000 {
 				randomAddresses = append(randomAddresses, addr)
 			}
 		}

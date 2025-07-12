@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build -o test-build ./cmd/injector)",
+      "Bash(go mod tidy)",
+      "Bash(go build)"
+    ],
+    "deny": []
+  }
+}

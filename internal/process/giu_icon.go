@@ -3,8 +3,6 @@ package process
 import (
 	"image"
 	"image/color"
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/theme"
 )
 
 // GetProcessIcon 获取进程图标（简化版本）
@@ -40,11 +38,10 @@ func GetDefaultIcon() image.Image {
 	return img
 }
 
-// GetProcessIconResource 获取进程图标资源（用于Fyne UI）
-func GetProcessIconResource(proc ProcessEntry) fyne.Resource {
-	// 暂时返回默认图标资源
-	// 在实际实现中，可以根据进程类型返回不同的图标
-	return theme.ComputerIcon()
+// GetProcessIconResource 获取进程图标资源（已弃用，仅为兼容性保留）
+func GetProcessIconResource(proc ProcessEntry) interface{} {
+	// 返回nil，因为giu不需要资源对象
+	return nil
 }
 
 // ClearIconCache 清空图标缓存（简化版本）
