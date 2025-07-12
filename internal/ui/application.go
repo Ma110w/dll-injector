@@ -71,15 +71,17 @@ type Application struct {
 	stealthyThreads      bool
 
 	// UI state
-	showAboutDialog    bool
-	showHelpDialog     bool
-	showConfirmDialog  bool
-	showProgressDialog bool
-	showSuccessDialog  bool
-	confirmDialogText  string
-	progressText       string
-	successText        string
-	selectedTab        int32 // 0=Basic, 1=Advanced, 2=Preset
+	showAboutDialog      bool
+	showHelpDialog       bool
+	showConfirmDialog    bool
+	showProgressDialog   bool
+	showSuccessDialog    bool
+	showProcessDialog    bool  // New: Process selection dialog
+	confirmDialogText    string
+	progressText         string
+	successText          string
+	selectedTab          int32 // 0=Basic, 1=Advanced, 2=Preset
+	processSearchText    string // New: Search text for process dialog
 
 	// Mutex for thread safety
 	mu sync.RWMutex
@@ -274,6 +276,9 @@ func (app *Application) loop() {
 			),
 		),
 	)
+
+	// Render dialogs
+	app.buildProcessSelectionDialog()
 }
 
 // buildTopRow builds the top row with DLL File and Target Process
@@ -314,9 +319,9 @@ func (app *Application) buildTopRow() giu.Widget {
 				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 					giu.Button("Select Process").OnClick(func() {
-						fmt.Println("Select Process clicked")
-						app.selectedPID = 1234
-						app.selectedProcessName = "notepad.exe"
+						fmt.Println("Opening process selection dialog")
+						app.refreshProcessList() // Refresh process list before showing dialog
+						app.showProcessDialog = true
 					}),
 				),
 			),
@@ -586,6 +591,168 @@ func (app *Application) onInjectClickedSimple() {
 		app.selectedDllPath, app.selectedPID, methodName)
 }
 
+// buildProcessSelectionDialog builds the process selection dialog
+func (app *Application) buildProcessSelectionDialog() {
+	if !app.showProcessDialog {
+		return
+	}
+
+	giu.PopupModal("Select Target Process").IsOpen(&app.showProcessDialog).Layout(
+		giu.Column(
+			// Search section
+			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
+				giu.Label("Search Processes:"),
+			),
+			giu.Row(
+				giu.Style().SetColor(giu.StyleColorFrameBg, color.RGBA{R: 50, G: 50, B: 50, A: 255}).To(
+					giu.InputText(&app.processSearchText).Hint("Type to search processes...").Size(600),
+				),
+				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
+					giu.Button("Refresh").Size(80, 0).OnClick(func() {
+						app.refreshProcessList()
+						fmt.Println("Process list refreshed")
+					}),
+				),
+			),
+			giu.Spacing(),
+
+			// Process list
+			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
+				giu.Label("Available Processes:"),
+			),
+			giu.Separator(),
+
+			// Process table in a child window for scrolling
+			giu.Child().Size(-1, 400).Layout(
+				app.buildProcessTable(),
+			),
+
+			giu.Spacing(),
+			// Dialog buttons
+			giu.Row(
+				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
+					giu.Button("Cancel").Size(100, 30).OnClick(func() {
+						app.showProcessDialog = false
+						app.processSearchText = "" // Clear search
+					}),
+				),
+			),
+		),
+	)
+}
+
+// buildProcessTable builds the process table for the dialog
+func (app *Application) buildProcessTable() giu.Widget {
+	app.mu.RLock()
+	processes := make([]process.ProcessEntry, len(app.processes))
+	copy(processes, app.processes)
+	app.mu.RUnlock()
+
+	// Filter processes based on search text
+	var filteredProcesses []process.ProcessEntry
+	searchLower := strings.ToLower(app.processSearchText)
+	for _, proc := range processes {
+		if searchLower == "" ||
+			strings.Contains(strings.ToLower(proc.Name), searchLower) ||
+			strings.Contains(strings.ToLower(proc.Executable), searchLower) ||
+			strings.Contains(strconv.FormatInt(int64(proc.PID), 10), searchLower) {
+			filteredProcesses = append(filteredProcesses, proc)
+		}
+	}
+
+	// Limit the number of processes shown to improve performance
+	maxProcesses := 100
+	if len(filteredProcesses) > maxProcesses {
+		filteredProcesses = filteredProcesses[:maxProcesses]
+	}
+
+	var processWidgets []giu.Widget
+
+	// Header
+	processWidgets = append(processWidgets,
+		giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
+			giu.Row(
+				giu.Label("PID"),
+				giu.Dummy(60, 0),
+				giu.Label("Process Name"),
+				giu.Dummy(150, 0),
+				giu.Label("Executable Path"),
+				giu.Dummy(200, 0),
+				giu.Label("Action"),
+			),
+		),
+		giu.Separator(),
+	)
+
+	// Process rows
+	for _, proc := range filteredProcesses {
+		proc := proc // Capture for closure
+		isSelected := proc.PID == app.selectedPID
+
+		// Truncate long executable paths
+		execPath := proc.Executable
+		if len(execPath) > 60 {
+			execPath = "..." + execPath[len(execPath)-57:]
+		}
+
+		// Style for selected row
+		var rowStyle giu.Widget
+		if isSelected {
+			rowStyle = giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 0, G: 255, B: 0, A: 255}).To(
+				giu.Row(
+					giu.Label(fmt.Sprintf("%d", proc.PID)),
+					giu.Dummy(60, 0),
+					giu.Label(proc.Name),
+					giu.Dummy(150, 0),
+					giu.Label(execPath),
+					giu.Dummy(200, 0),
+					giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
+						giu.Button("✓ Selected").OnClick(func() {
+							app.selectedPID = proc.PID
+							app.selectedProcessName = proc.Name
+							app.showProcessDialog = false
+							app.processSearchText = "" // Clear search
+							app.addLogLine(fmt.Sprintf("✓ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+							fmt.Printf("Process selected: %s (PID: %d)\n", proc.Name, proc.PID)
+						}),
+					),
+				),
+			)
+		} else {
+			rowStyle = giu.Row(
+				giu.Label(fmt.Sprintf("%d", proc.PID)),
+				giu.Dummy(60, 0),
+				giu.Label(proc.Name),
+				giu.Dummy(150, 0),
+				giu.Label(execPath),
+				giu.Dummy(200, 0),
+				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
+					giu.Button("Select").OnClick(func() {
+						app.selectedPID = proc.PID
+						app.selectedProcessName = proc.Name
+						app.showProcessDialog = false
+						app.processSearchText = "" // Clear search
+						app.addLogLine(fmt.Sprintf("✓ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+						fmt.Printf("Process selected: %s (PID: %d)\n", proc.Name, proc.PID)
+					}),
+				),
+			)
+		}
+
+		processWidgets = append(processWidgets, rowStyle)
+	}
+
+	// Show count info
+	processWidgets = append(processWidgets,
+		giu.Spacing(),
+		giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 150, G: 150, B: 150, A: 255}).To(
+			giu.Label(fmt.Sprintf("Showing %d of %d processes", len(filteredProcesses), len(processes))),
+		),
+	)
+
+	return giu.Column(processWidgets...)
+}
+
 // buildLeftPanel builds the left panel with injection controls
 func (app *Application) buildLeftPanel() giu.Widget {
 	return giu.Child().Size(-1, -1).Layout(
@@ -729,107 +896,8 @@ func (app *Application) buildAntiDetectionOptions() giu.Widget {
 	)
 }
 
-// buildRightPanel builds the right panel with process list and logs
-func (app *Application) buildRightPanel() giu.Widget {
-	splitRatio := float32(0.6)
-	return giu.SplitLayout(giu.DirectionVertical, &splitRatio,
-		// Process list
-		app.buildProcessList(),
-		// Log console
-		app.buildLogConsole(),
-	)
-}
-
-// buildProcessList builds the process list section
-func (app *Application) buildProcessList() giu.Widget {
-	app.mu.RLock()
-	processes := make([]process.ProcessEntry, len(app.processes))
-	copy(processes, app.processes)
-	app.mu.RUnlock()
-
-	// Filter processes based on search text
-	var filteredProcesses []process.ProcessEntry
-	searchLower := strings.ToLower(app.searchText)
-	for _, proc := range processes {
-		if searchLower == "" ||
-			strings.Contains(strings.ToLower(proc.Name), searchLower) ||
-			strings.Contains(strings.ToLower(proc.Executable), searchLower) ||
-			strings.Contains(strconv.FormatInt(int64(proc.PID), 10), searchLower) {
-			filteredProcesses = append(filteredProcesses, proc)
-		}
-	}
-
-	return giu.Child().Size(-1, -1).Layout(
-		giu.Style().SetStyle(giu.StyleVarWindowPadding, 10, 10).To(
-			giu.Column(
-				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 51, G: 204, B: 255, A: 255}).To(
-					giu.Label("Process List"),
-				),
-				giu.Separator(),
-				giu.Row(
-					giu.InputText(&app.searchText).Size(-80).Hint("Search processes..."),
-					giu.Button("Refresh").Size(70, 0).OnClick(func() {
-						app.refreshProcessList()
-					}),
-				),
-				giu.Spacing(),
-				app.buildProcessTable(filteredProcesses),
-			),
-		),
-	)
-}
-
-// buildProcessTable builds the process table
-func (app *Application) buildProcessTable(processes []process.ProcessEntry) giu.Widget {
-	// Limit the number of processes shown to improve performance
-	maxProcesses := 50
-	if len(processes) > maxProcesses {
-		processes = processes[:maxProcesses]
-	}
-
-	// Create a simple list instead of a complex table
-	var processWidgets []giu.Widget
-
-	// Header
-	processWidgets = append(processWidgets,
-		giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 255, G: 255, B: 51, A: 255}).To(
-			giu.Label("PID | Process Name | Executable | Action"),
-		),
-		giu.Separator(),
-	)
-
-	// Process rows
-	for _, proc := range processes {
-		proc := proc // Capture for closure
-		isSelected := proc.PID == app.selectedPID
-
-		// Truncate long executable paths
-		execPath := proc.Executable
-		if len(execPath) > 40 {
-			execPath = "..." + execPath[len(execPath)-37:]
-		}
-
-		// Create a formatted string for the process info
-		processInfo := fmt.Sprintf("%d | %s | %s", proc.PID, proc.Name, execPath)
-
-		var rowWidget giu.Widget = giu.Row(
-			giu.Label(processInfo),
-			giu.Button("Select").OnClick(func() {
-				app.selectedPID = proc.PID
-				app.selectedProcessName = proc.Name
-				app.logger.Info("Process selected", zap.String("name", proc.Name), zap.Int32("pid", proc.PID))
-			}),
-		)
-
-		if isSelected {
-			rowWidget = giu.Style().SetColor(giu.StyleColorChildBg, color.RGBA{R: 51, G: 179, B: 51, A: 77}).To(rowWidget)
-		}
-
-		processWidgets = append(processWidgets, rowWidget)
-	}
-
-	return giu.Column(processWidgets...)
-}
+// buildRightPanel builds the right panel with process list and logs (legacy - not used in current layout)
+// This function is kept for potential future use but not currently called
 
 // buildLogConsole builds the log console section
 func (app *Application) buildLogConsole() giu.Widget {
