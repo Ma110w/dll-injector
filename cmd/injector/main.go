@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/whispin/dll-injector/internal/i18n"
 	"github.com/whispin/dll-injector/internal/ui"
 	"go.uber.org/zap"
 )
@@ -11,7 +12,7 @@ func main() {
 
 	// Log startup using app's logger (will show in UI)
 	logger := app.Log()
-	logger.Info("DLL Injector starting")
+	logger.Info(i18n.T("dll_injector_starting"))
 
 	// Start the application
 	if err := app.Run(); err != nil {

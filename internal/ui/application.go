@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"image/color"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/whispin/dll-injector/internal/i18n"
 	"github.com/whispin/dll-injector/internal/injector"
 	"github.com/whispin/dll-injector/internal/process"
 	"go.uber.org/zap"
@@ -197,46 +199,46 @@ func (c *consoleLog) shouldSkipMessage(message string, fields []zapcore.Field) b
 
 // formatUserFriendlyMessage 格式化用户友好的消息
 func (c *consoleLog) formatUserFriendlyMessage(message string, level zapcore.Level, fields []zapcore.Field) string {
-	// 根据消息类型返回用户友好的格式
+	// 根据消息类型返回用户友好的格式，使用国际化
 	switch {
-	case strings.Contains(message, "DLL Injector starting"):
-		return "🚀 DLL注入器已启动"
-	case strings.Contains(message, "DLL Injector started"):
-		return "✅ 程序初始化完成"
+	case strings.Contains(message, i18n.T("dll_injector_starting")):
+		return i18n.T("dll_injector_starting")
+	case strings.Contains(message, i18n.T("dll_injector_started")):
+		return i18n.T("dll_injector_started")
 	case strings.Contains(message, "Application closed"):
-		return "👋 程序已关闭"
-	case strings.Contains(message, "Injection method selected"):
+		return "👋 " + i18n.T("dll_injector_started") // Reuse for closed message
+	case strings.Contains(message, i18n.T("injection_method_selected")):
 		method := c.getFieldValue(fields, "method")
-		return fmt.Sprintf("🔧 选择注入方式: %s", c.translateMethod(method))
-	case strings.Contains(message, "Process selected"):
+		return fmt.Sprintf("🔧 %s: %s", i18n.T("injection_method_selected"), c.translateMethod(method))
+	case strings.Contains(message, i18n.T("process_selected")):
 		name := c.getFieldValue(fields, "name")
 		pid := c.getFieldValue(fields, "PID")
-		return fmt.Sprintf("🎯 选择目标进程: %s (PID: %s)", name, pid)
-	case strings.Contains(message, "Starting DLL injection"):
+		return fmt.Sprintf("🎯 %s: %s (PID: %s)", i18n.T("process_selected"), name, pid)
+	case strings.Contains(message, i18n.T("starting_dll_injection")):
 		dll := c.getFieldValue(fields, "DLL")
 		process := c.getFieldValue(fields, "Process")
-		return fmt.Sprintf("⚡ 开始注入: %s → %s", c.getFileName(dll), process)
+		return fmt.Sprintf("⚡ %s: %s → %s", i18n.T("starting_dll_injection"), c.getFileName(dll), process)
 	case strings.Contains(message, "Starting injection"):
 		method := c.getFieldValue(fields, "method")
-		return fmt.Sprintf("🔄 执行注入 (%s)", c.translateMethod(method))
-	case strings.Contains(message, "Injection successful"):
-		return "✅ 注入成功完成"
-	case strings.Contains(message, "Injection failed"):
+		return fmt.Sprintf("🔄 %s (%s)", i18n.T("starting_dll_injection"), c.translateMethod(method))
+	case strings.Contains(message, i18n.T("injection_successful")):
+		return i18n.T("injection_successful")
+	case strings.Contains(message, i18n.T("injection_failed")):
 		if level == zapcore.ErrorLevel {
 			reason := c.getFieldValue(fields, "reason")
 			if reason != "" {
-				return fmt.Sprintf("❌ 注入失败: %s", c.translateError(reason))
+				return fmt.Sprintf("❌ %s: %s", i18n.T("injection_failed"), c.translateError(reason))
 			}
-			return "❌ 注入失败"
+			return "❌ " + i18n.T("injection_failed")
 		}
 	case strings.Contains(message, "Failed to read DLL file"):
-		return "❌ 无法读取DLL文件"
+		return "❌ " + i18n.T("no_dll_selected")
 	case strings.Contains(message, "Failed to open target process"):
-		return "❌ 无法打开目标进程"
+		return "❌ " + i18n.T("no_process_selected_error")
 	case strings.Contains(message, "Manual mapping successful"):
-		return "✅ 手动映射完成"
+		return "✅ " + i18n.T("injection_successful")
 	case strings.Contains(message, "injection successful"):
-		return "✅ 注入操作完成"
+		return i18n.T("injection_successful")
 	}
 
 	// 对于其他消息，如果是错误级别，显示简化版本
@@ -271,31 +273,17 @@ func (c *consoleLog) getFieldValue(fields []zapcore.Field, key string) string {
 
 // translateMethod 翻译注入方法名称
 func (c *consoleLog) translateMethod(method string) string {
-	switch method {
-	case "Standard Injection":
-		return "标准注入"
-	case "SetWindowsHookEx Injection":
-		return "钩子注入"
-	case "QueueUserAPC Injection":
-		return "APC注入"
-	case "Early Bird APC Injection":
-		return "早鸟APC注入"
-	case "DLL Notification Injection":
-		return "DLL通知注入"
-	case "Job Object Cold Injection":
-		return "冷冻进程注入"
-	default:
-		return method
-	}
+	// 直接返回方法名，因为UI中已经使用了国际化的方法名
+	return method
 }
 
 // translateError 翻译错误信息
 func (c *consoleLog) translateError(reason string) string {
 	switch reason {
-	case "No DLL file selected":
-		return "未选择DLL文件"
-	case "No target process selected":
-		return "未选择目标进程"
+	case i18n.T("no_dll_selected"):
+		return i18n.T("no_dll_selected")
+	case i18n.T("no_process_selected_error"):
+		return i18n.T("no_process_selected_error")
 	default:
 		return reason
 	}
@@ -446,9 +434,12 @@ type Application struct {
 
 // NewApplication 创建一个新的GUI应用程序实例
 func NewApplication(title string, width, height int) *Application {
+	// Initialize internationalization
+	i18n.Init()
+
 	app := &Application{
 		fyneApp:          fyneapp.New(),
-		title:            title,
+		title:            i18n.T("app_title"), // Use localized title
 		width:            float32(width),
 		height:           float32(height),
 		processInfo:      process.NewInfo(),
@@ -523,7 +514,7 @@ func (app *Application) Run() error {
 	app.refreshProcessList()
 
 	// 记录启动日志
-	app.logger.Info("DLL Injector started")
+	app.logger.Info(i18n.T("dll_injector_started"))
 
 	// 创建内容
 	content := app.createContent()
@@ -558,7 +549,7 @@ func (app *Application) createContent() fyne.CanvasObject {
 // createConsolePanel 创建控制台日志面板
 func (app *Application) createConsolePanel() fyne.CanvasObject {
 	// Create a console panel with a title
-	consoleTitle := widget.NewLabelWithStyle("Console Logs", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	consoleTitle := widget.NewLabelWithStyle(i18n.T("console_logs"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
 	// Title bar - buttons removed
 	titleBar := container.NewBorder(
@@ -617,7 +608,7 @@ func (app *Application) createConsolePanel() fyne.CanvasObject {
 func (app *Application) createLeftPanel() fyne.CanvasObject {
 	// DLL selection with inline label design
 	dllEntry := widget.NewEntryWithData(app.selectedDll)
-	dllEntry.SetPlaceHolder("Select DLL file path...")
+	dllEntry.SetPlaceHolder(i18n.T("select_dll_placeholder"))
 	dllEntry.Wrapping = fyne.TextTruncate
 	// Set a reasonable maximum width for the entry
 	dllEntry.Resize(fyne.NewSize(200, dllEntry.MinSize().Height))
@@ -642,19 +633,19 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	})
 
 	// Create compact DLL selector with inline label using the new component
-	dllSelector := InlineLabelEntry("DLL File:", dllEntry, browseDllButton)
+	dllSelector := InlineLabelEntry(i18n.T("dll_file"), dllEntry, browseDllButton)
 
 	// Create a simple card for the DLL selector
 	dllCard := NewCard(dllSelector, false)
 
 	// Injection method selection - using radio button group, more obvious
 	injectMethods := []string{
-		"Standard Injection",
-		"SetWindowsHookEx",
-		"QueueUserAPC",
-		"Early Bird",
-		"DLL Notification",
-		"Job Object",
+		i18n.T("standard_injection"),
+		i18n.T("setwindowshookex"),
+		i18n.T("queueuserapc"),
+		i18n.T("early_bird"),
+		i18n.T("dll_notification"),
+		i18n.T("job_object"),
 	}
 
 	// Create radio button group
@@ -666,24 +657,24 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	methodRadioGroup.OnChanged = func(selected string) {
 		app.selectedMethod = selected
 		switch selected {
-		case "Standard Injection":
+		case i18n.T("standard_injection"):
 			app.injectionMethod = int(injector.StandardInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "Standard Injection"))
-		case "SetWindowsHookEx":
+			app.logger.Info(i18n.T("injection_method_selected"), zap.String("method", selected))
+		case i18n.T("setwindowshookex"):
 			app.injectionMethod = int(injector.SetWindowsHookExInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "SetWindowsHookEx"))
-		case "QueueUserAPC":
+			app.logger.Info(i18n.T("injection_method_selected"), zap.String("method", selected))
+		case i18n.T("queueuserapc"):
 			app.injectionMethod = int(injector.QueueUserAPCInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "QueueUserAPC"))
-		case "Early Bird":
+			app.logger.Info(i18n.T("injection_method_selected"), zap.String("method", selected))
+		case i18n.T("early_bird"):
 			app.injectionMethod = int(injector.EarlyBirdAPCInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "Early Bird"))
-		case "DLL Notification":
+			app.logger.Info(i18n.T("injection_method_selected"), zap.String("method", selected))
+		case i18n.T("dll_notification"):
 			app.injectionMethod = int(injector.DllNotificationInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "DLL Notification"))
-		case "Job Object":
+			app.logger.Info(i18n.T("injection_method_selected"), zap.String("method", selected))
+		case i18n.T("job_object"):
 			app.injectionMethod = int(injector.CryoBirdInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "Job Object"))
+			app.logger.Info(i18n.T("injection_method_selected"), zap.String("method", selected))
 		}
 
 		// Only call updateBypassOptionsState when all options are initialized
@@ -702,7 +693,7 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	methodRadioGroup.SetSelected(app.selectedMethod)
 
 	// Create compact injection method selector with inline label
-	methodSelector := InlineLabelRadioGroup("Injection Method:", methodRadioGroup)
+	methodSelector := InlineLabelRadioGroup(i18n.T("injection_method"), methodRadioGroup)
 
 	// Create a simple card for the method selector
 	methodCard := NewCard(methodSelector, false)
@@ -714,43 +705,43 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	app.updateBypassOptionsState()
 
 	// Target process selection with inline label design
-	selectProcessButton := CompactButton("Select Process", func() {
+	selectProcessButton := CompactButton(i18n.T("select_process"), func() {
 		// Create a larger dialog
-		processDialog := dialog.NewCustom("Select Target Process", "Close", app.createRightPanel(), app.mainWindow)
+		processDialog := dialog.NewCustom(i18n.T("select_target_process"), i18n.T("close"), app.createRightPanel(), app.mainWindow)
 		processDialog.Resize(fyne.NewSize(500, 600)) // Adjust to a more suitable size, increase height to show more processes
 		processDialog.Show()
 	})
 	selectProcessButton.Importance = widget.MediumImportance
 
 	// Display currently selected process information
-	app.selectedProcessLabel = widget.NewLabel("No Process Selected")
+	app.selectedProcessLabel = widget.NewLabel(i18n.T("no_process_selected"))
 	if app.selectedPID > 0 {
 		app.selectedProcessLabel.SetText(fmt.Sprintf("%s (PID: %d)", app.selectedProc, app.selectedPID))
 	}
 
 	// Create compact target process selector with inline label
-	processSelector := InlineLabelButton("Target Process:", selectProcessButton, app.selectedProcessLabel)
+	processSelector := InlineLabelButton(i18n.T("target_process"), selectProcessButton, app.selectedProcessLabel)
 
 	// Create a simple card for the process selector
 	processCard := NewCard(processSelector, false)
 
 	// Inject button - use light blue
-	injectButton := widget.NewButton("Inject", func() {
+	injectButton := widget.NewButton(i18n.T("inject"), func() {
 		dllPath, _ := app.selectedDll.Get()
 		if dllPath == "" {
-			app.logger.Error("Injection failed", zap.String("reason", "No DLL file selected"))
-			dialog.ShowError(fmt.Errorf("Please select a DLL file"), app.mainWindow)
+			app.logger.Error(i18n.T("injection_failed"), zap.String("reason", i18n.T("no_dll_selected")))
+			dialog.ShowError(fmt.Errorf(i18n.T("please_select_dll")), app.mainWindow)
 			return
 		}
 
 		if app.selectedPID <= 0 {
-			app.logger.Error("Injection failed", zap.String("reason", "No target process selected"))
-			dialog.ShowError(fmt.Errorf("Please select a target process"), app.mainWindow)
+			app.logger.Error(i18n.T("injection_failed"), zap.String("reason", i18n.T("no_process_selected_error")))
+			dialog.ShowError(fmt.Errorf(i18n.T("please_select_process")), app.mainWindow)
 			return
 		}
 
-		app.logger.Info("Starting DLL injection",
-			zap.String("DLL", dllPath),
+		app.logger.Info(i18n.T("starting_dll_injection"),
+			zap.String("DLL", filepath.Base(dllPath)), // Only show filename
 			zap.String("Process", app.selectedProc),
 			zap.Int32("PID", app.selectedPID),
 		)
@@ -811,11 +802,11 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 					app.logger.Error("Injection failed", zap.Error(err))
 					dialog.ShowError(fmt.Errorf("Injection failed: %v", err), app.mainWindow)
 				} else {
-					app.logger.Info("Injection successful",
-						zap.String("DLL", dllPath),
+					app.logger.Info(i18n.T("injection_successful"),
+						zap.String("DLL", filepath.Base(dllPath)),
 						zap.String("Process", app.selectedProc),
 						zap.Int32("PID", app.selectedPID))
-					dialog.ShowInformation("Injection Successful", "DLL has been successfully injected into the target process", app.mainWindow)
+					dialog.ShowInformation(i18n.T("injection_successful_title"), i18n.T("injection_successful_msg"), app.mainWindow)
 				}
 			})
 		}()
@@ -1352,7 +1343,7 @@ func (f *dllFilter) Matches(uri fyne.URI) bool {
 // createRightPanel 创建右侧面板，显示进程列表
 func (app *Application) createRightPanel() fyne.CanvasObject {
 	// Search box
-	app.searchEntry = SearchField("Search process name or PID...", func(query string) {
+	app.searchEntry = SearchField(i18n.T("process_name")+" / "+i18n.T("pid")+"...", func(query string) {
 		app.filterProcesses(query)
 	})
 
@@ -1403,7 +1394,7 @@ func (app *Application) createRightPanel() fyne.CanvasObject {
 		}
 		app.selectedPID = app.processes[id].PID
 		app.selectedProc = app.processes[id].Name
-		app.logger.Info("Process selected",
+		app.logger.Info(i18n.T("process_selected"),
 			zap.String("name", app.selectedProc),
 			zap.Int32("PID", app.selectedPID),
 		)
@@ -1575,7 +1566,7 @@ func (app *Application) Close() {
 // createCompactBypassOptions 创建超紧凑的反检测选项界面
 func (app *Application) createCompactBypassOptions() fyne.CanvasObject {
 	// 创建标题
-	titleLabel := widget.NewLabelWithStyle("🛡️ Anti-Detection Options", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	titleLabel := widget.NewLabelWithStyle(i18n.T("anti_detection_options"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
 	// 创建超紧凑的标签页
 	tabs := container.NewAppTabs()
@@ -1583,15 +1574,15 @@ func (app *Application) createCompactBypassOptions() fyne.CanvasObject {
 
 	// 基础选项标签页 - 使用更紧凑的布局
 	basicTab := app.createUltraCompactBasicTab()
-	tabs.Append(container.NewTabItem("基础", basicTab))
+	tabs.Append(container.NewTabItem(i18n.T("basic"), basicTab))
 
 	// 高级选项标签页
 	advancedTab := app.createUltraCompactAdvancedTab()
-	tabs.Append(container.NewTabItem("高级", advancedTab))
+	tabs.Append(container.NewTabItem(i18n.T("advanced"), advancedTab))
 
 	// 预设配置标签页
 	presetTab := app.createUltraCompactPresetTab()
-	tabs.Append(container.NewTabItem("预设", presetTab))
+	tabs.Append(container.NewTabItem(i18n.T("preset"), presetTab))
 
 	// 主容器 - 直接显示，不折叠
 	mainContainer := container.NewVBox(
@@ -1609,13 +1600,13 @@ func (app *Application) createUltraCompactBasicTab() fyne.CanvasObject {
 		app.bypassCheckboxes = make(map[string]*widget.Check)
 	}
 
-	// 创建紧凑的checkbox，去掉多余的文字
-	app.bypassCheckboxes["Load DLL from Memory"] = widget.NewCheck("内存加载", func(checked bool) {
+	// 创建紧凑的checkbox，使用国际化标签
+	app.bypassCheckboxes["Load DLL from Memory"] = widget.NewCheck(i18n.T("memory_load"), func(checked bool) {
 		app.memoryLoad = checked
 		app.updateBypassOptionsState()
 	})
 
-	app.bypassCheckboxes["Use Manual Mapping"] = widget.NewCheck("手动映射", func(checked bool) {
+	app.bypassCheckboxes["Use Manual Mapping"] = widget.NewCheck(i18n.T("manual_mapping"), func(checked bool) {
 		app.manualMapping = checked
 		if checked {
 			app.memoryLoad = true
@@ -1624,19 +1615,19 @@ func (app *Application) createUltraCompactBasicTab() fyne.CanvasObject {
 		app.updateBypassOptionsState()
 	})
 
-	app.bypassCheckboxes["Erase PE Header"] = widget.NewCheck("擦除PE头", func(checked bool) {
+	app.bypassCheckboxes["Erase PE Header"] = widget.NewCheck(i18n.T("erase_pe_header"), func(checked bool) {
 		app.peHeaderErasure = checked
 	})
 
-	app.bypassCheckboxes["Path Spoofing"] = widget.NewCheck("路径伪装", func(checked bool) {
+	app.bypassCheckboxes["Path Spoofing"] = widget.NewCheck(i18n.T("path_spoofing"), func(checked bool) {
 		app.pathSpoofing = checked
 	})
 
-	app.bypassCheckboxes["Use Legitimate Process"] = widget.NewCheck("合法进程", func(checked bool) {
+	app.bypassCheckboxes["Use Legitimate Process"] = widget.NewCheck(i18n.T("legitimate_process"), func(checked bool) {
 		app.legitProcessInjection = checked
 	})
 
-	app.bypassCheckboxes["Erase Entry Point"] = widget.NewCheck("擦除入口", func(checked bool) {
+	app.bypassCheckboxes["Erase Entry Point"] = widget.NewCheck(i18n.T("erase_entry_point"), func(checked bool) {
 		app.entryPointErase = checked
 	})
 
@@ -1653,8 +1644,8 @@ func (app *Application) createUltraCompactBasicTab() fyne.CanvasObject {
 
 // createUltraCompactAdvancedTab 创建超紧凑的高级选项标签页
 func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
-	// 创建所有高级选项的checkbox
-	app.bypassCheckboxes["PTE Modification"] = widget.NewCheck("PTE修改", func(checked bool) {
+	// 创建所有高级选项的checkbox，使用国际化标签
+	app.bypassCheckboxes["PTE Modification"] = widget.NewCheck(i18n.T("pte_modification"), func(checked bool) {
 		app.pteSpoofing = checked
 		if checked && app.vadManipulation {
 			app.vadManipulation = false
@@ -1662,7 +1653,7 @@ func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
 		}
 	})
 
-	app.bypassCheckboxes["VAD Manipulation"] = widget.NewCheck("VAD操作", func(checked bool) {
+	app.bypassCheckboxes["VAD Manipulation"] = widget.NewCheck(i18n.T("vad_manipulation"), func(checked bool) {
 		app.vadManipulation = checked
 		if checked && app.pteSpoofing {
 			app.pteSpoofing = false
@@ -1670,7 +1661,7 @@ func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
 		}
 	})
 
-	app.bypassCheckboxes["Remove VAD Node"] = widget.NewCheck("移除VAD", func(checked bool) {
+	app.bypassCheckboxes["Remove VAD Node"] = widget.NewCheck(i18n.T("remove_vad_node"), func(checked bool) {
 		app.removeVADNode = checked
 		if checked && !app.vadManipulation {
 			app.vadManipulation = true
@@ -1682,23 +1673,23 @@ func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
 		}
 	})
 
-	app.bypassCheckboxes["Direct Syscalls"] = widget.NewCheck("直接调用", func(checked bool) {
+	app.bypassCheckboxes["Direct Syscalls"] = widget.NewCheck(i18n.T("direct_syscalls"), func(checked bool) {
 		app.directSyscalls = checked
 	})
 
-	app.bypassCheckboxes["Allocate Behind Thread Stack"] = widget.NewCheck("线程栈", func(checked bool) {
+	app.bypassCheckboxes["Allocate Behind Thread Stack"] = widget.NewCheck(i18n.T("thread_stack_allocation"), func(checked bool) {
 		app.allocBehindThreadStack = checked
 	})
 
-	app.bypassCheckboxes["Anti-Debug Techniques"] = widget.NewCheck("反调试", func(checked bool) {
+	app.bypassCheckboxes["Anti-Debug Techniques"] = widget.NewCheck(i18n.T("anti_debug"), func(checked bool) {
 		app.antiDebugTechniques = checked
 	})
 
-	app.bypassCheckboxes["Anti-VM Techniques"] = widget.NewCheck("反虚拟机", func(checked bool) {
+	app.bypassCheckboxes["Anti-VM Techniques"] = widget.NewCheck(i18n.T("anti_vm"), func(checked bool) {
 		app.antiVMTechniques = checked
 	})
 
-	app.bypassCheckboxes["Process Hollowing"] = widget.NewCheck("进程挖空", func(checked bool) {
+	app.bypassCheckboxes["Process Hollowing"] = widget.NewCheck(i18n.T("process_hollowing"), func(checked bool) {
 		app.processHollowing = checked
 		if checked && app.doppelgangingProcess {
 			app.doppelgangingProcess = false
@@ -1706,7 +1697,7 @@ func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
 		}
 	})
 
-	app.bypassCheckboxes["Thread Hijacking"] = widget.NewCheck("线程劫持", func(checked bool) {
+	app.bypassCheckboxes["Thread Hijacking"] = widget.NewCheck(i18n.T("thread_hijacking"), func(checked bool) {
 		app.threadHijacking = checked
 		if checked && app.stealthyThreads {
 			app.stealthyThreads = false
@@ -1714,12 +1705,12 @@ func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
 		}
 	})
 
-	// 添加缺失的checkbox
-	app.bypassCheckboxes["Map to Hidden Memory"] = widget.NewCheck("隐藏内存", func(checked bool) {
+	// 添加缺失的checkbox，使用国际化标签
+	app.bypassCheckboxes["Map to Hidden Memory"] = widget.NewCheck(i18n.T("hidden_memory"), func(checked bool) {
 		app.invisibleMemory = checked
 	})
 
-	app.bypassCheckboxes["Process Doppelganging"] = widget.NewCheck("进程替身", func(checked bool) {
+	app.bypassCheckboxes["Process Doppelganging"] = widget.NewCheck(i18n.T("process_doppelganging"), func(checked bool) {
 		app.doppelgangingProcess = checked
 		if checked && app.processHollowing {
 			app.processHollowing = false
@@ -1727,15 +1718,15 @@ func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
 		}
 	})
 
-	app.bypassCheckboxes["Process Mirroring"] = widget.NewCheck("进程镜像", func(checked bool) {
+	app.bypassCheckboxes["Process Mirroring"] = widget.NewCheck(i18n.T("process_doppelganging"), func(checked bool) {
 		app.processMirroring = checked
 	})
 
-	app.bypassCheckboxes["APC Queueing"] = widget.NewCheck("APC队列", func(checked bool) {
+	app.bypassCheckboxes["APC Queueing"] = widget.NewCheck(i18n.T("queueuserapc"), func(checked bool) {
 		app.apcQueueing = checked
 	})
 
-	app.bypassCheckboxes["Stealthy Threads"] = widget.NewCheck("隐蔽线程", func(checked bool) {
+	app.bypassCheckboxes["Stealthy Threads"] = widget.NewCheck(i18n.T("thread_hijacking"), func(checked bool) {
 		app.stealthyThreads = checked
 		if checked && app.threadHijacking {
 			app.threadHijacking = false
@@ -1743,15 +1734,15 @@ func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
 		}
 	})
 
-	app.bypassCheckboxes["Randomize Allocation"] = widget.NewCheck("随机分配", func(checked bool) {
+	app.bypassCheckboxes["Randomize Allocation"] = widget.NewCheck(i18n.T("hidden_memory"), func(checked bool) {
 		app.randomizeAllocation = checked
 	})
 
-	app.bypassCheckboxes["Memory Fluctuation"] = widget.NewCheck("内存波动", func(checked bool) {
+	app.bypassCheckboxes["Memory Fluctuation"] = widget.NewCheck(i18n.T("hidden_memory"), func(checked bool) {
 		app.memoryFluctuation = checked
 	})
 
-	app.bypassCheckboxes["Multi-Stage Injection"] = widget.NewCheck("多阶段", func(checked bool) {
+	app.bypassCheckboxes["Multi-Stage Injection"] = widget.NewCheck(i18n.T("multi_stage_injection"), func(checked bool) {
 		app.multiStageInjection = checked
 	})
 
@@ -1778,29 +1769,29 @@ func (app *Application) createUltraCompactAdvancedTab() fyne.CanvasObject {
 
 // createUltraCompactPresetTab 创建超紧凑的预设标签页
 func (app *Application) createUltraCompactPresetTab() fyne.CanvasObject {
-	// 预设配置按钮 - 使用更紧凑的文字
-	basicPresetBtn := widget.NewButton("🟢 基础", func() {
+	// 预设配置按钮 - 使用国际化标签
+	basicPresetBtn := widget.NewButton(i18n.T("basic_stealth"), func() {
 		app.applyBasicPreset()
 	})
 	basicPresetBtn.Importance = widget.MediumImportance
 
-	advancedPresetBtn := widget.NewButton("🟡 高级", func() {
+	advancedPresetBtn := widget.NewButton(i18n.T("advanced_stealth"), func() {
 		app.applyAdvancedPreset()
 	})
 	advancedPresetBtn.Importance = widget.MediumImportance
 
-	expertPresetBtn := widget.NewButton("🔴 专家", func() {
+	expertPresetBtn := widget.NewButton(i18n.T("expert_stealth"), func() {
 		app.applyExpertPreset()
 	})
 	expertPresetBtn.Importance = widget.MediumImportance
 
-	clearAllBtn := widget.NewButton("🔄 清除", func() {
+	clearAllBtn := widget.NewButton(i18n.T("clear_all"), func() {
 		app.clearAllOptions()
 	})
 	clearAllBtn.Importance = widget.LowImportance
 
 	// 紧凑的说明文字
-	infoLabel := widget.NewLabel("快速应用预设配置:")
+	infoLabel := widget.NewLabel(i18n.T("preset_info"))
 	infoLabel.TextStyle = fyne.TextStyle{Bold: true}
 
 	// 使用2x2网格布局
