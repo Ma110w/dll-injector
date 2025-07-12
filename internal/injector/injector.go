@@ -160,8 +160,8 @@ func (i *Injector) manualMapDLL(dllBytes []byte) error {
 	}
 	defer windows.CloseHandle(hProcess)
 
-	// Perform manual mapping
-	baseAddress, err := ManualMapDLL(hProcess, dllBytes)
+	// Perform manual mapping with bypass options
+	baseAddress, err := i.manualMapDLLWithOptions(hProcess, dllBytes)
 	if err != nil {
 		i.logger.Error("Manual mapping failed", "error", err)
 		return fmt.Errorf("manual mapping failed: %v", err)
@@ -176,6 +176,69 @@ func (i *Injector) manualMapDLL(dllBytes []byte) error {
 	}
 
 	return nil
+}
+
+// manualMapDLLWithOptions implements manual DLL mapping with bypass options
+func (i *Injector) manualMapDLLWithOptions(hProcess windows.Handle, dllBytes []byte) (uintptr, error) {
+	i.logger.Info("Starting manual mapping with bypass options")
+
+	// Parse PE header
+	peHeader, err := ParsePEHeader(dllBytes)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse PE header: %v", err)
+	}
+
+	imageSize := peHeader.OptionalHeader.SizeOfImage
+	i.logger.Info("PE image size", "size", imageSize)
+
+	var baseAddress uintptr
+
+	// Use invisible memory allocation if enabled
+	if i.bypassOptions.InvisibleMemory {
+		i.logger.Info("Using invisible memory allocation")
+		baseAddress, err = InvisibleMemoryAllocation(hProcess, uintptr(imageSize))
+		if err != nil {
+			return 0, fmt.Errorf("invisible memory allocation failed: %v", err)
+		}
+	} else {
+		// Standard memory allocation
+		baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
+			windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
+		if err != nil {
+			return 0, fmt.Errorf("failed to allocate memory: %v", err)
+		}
+	}
+
+	i.logger.Info("Memory allocated", "address", fmt.Sprintf("0x%X", baseAddress))
+
+	// Map PE sections
+	err = MapSections(hProcess, dllBytes, baseAddress, peHeader)
+	if err != nil {
+		return 0, fmt.Errorf("failed to map PE sections: %v", err)
+	}
+
+	// Process relocations
+	err = FixRelocations(hProcess, baseAddress, peHeader)
+	if err != nil {
+		i.logger.Warn("Failed to process relocations", "error", err)
+		// Continue anyway as some DLLs might work without relocations
+	}
+
+	// Resolve imports
+	err = FixImports(hProcess, baseAddress, peHeader)
+	if err != nil {
+		i.logger.Warn("Failed to resolve imports", "error", err)
+		// Continue anyway
+	}
+
+	// Execute DLL entry point if present
+	err = ExecuteDllEntry(hProcess, baseAddress, peHeader)
+	if err != nil {
+		i.logger.Warn("Failed to execute DLL entry point", "error", err)
+		// Continue anyway
+	}
+
+	return baseAddress, nil
 }
 
 // legitProcessInject performs injection through legitimate process

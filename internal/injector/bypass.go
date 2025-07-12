@@ -83,6 +83,52 @@ func EraseEntryPoint(processHandle windows.Handle, baseAddress uintptr) error {
 	return nil
 }
 
+// InvisibleMemoryAllocation allocates memory in high address space to avoid detection
+func InvisibleMemoryAllocation(hProcess windows.Handle, size uintptr) (uintptr, error) {
+	Printf("Attempting to allocate invisible memory in high address space, size: %d bytes\n", size)
+
+	// 获取适合当前架构的高地址
+	var highAddresses []uintptr
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		// 64位系统 - 使用运行时计算避免编译时常量溢出
+		shift := uint(28)
+		base1 := uint64(0x7FFF)
+		base2 := uint64(0x7FFE)
+		base3 := uint64(0x7FFD)
+
+		highAddresses = []uintptr{
+			uintptr(base1 << shift), // 0x7FFF0000000
+			uintptr(base2 << shift), // 0x7FFE0000000
+			uintptr(base3 << shift), // 0x7FFD0000000
+			0x70000000,
+		}
+	} else {
+		// 32位系统
+		highAddresses = []uintptr{0x70000000, 0x60000000, 0x50000000, 0x40000000}
+	}
+
+	for _, addr := range highAddresses {
+		Printf("Trying to allocate memory at address 0x%X...\n", addr)
+		baseAddress, err := VirtualAllocEx(hProcess, addr, size,
+			windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
+		if err == nil {
+			Printf("Successfully allocated invisible memory at address 0x%X\n", baseAddress)
+			return baseAddress, nil
+		}
+		Printf("Failed to allocate at 0x%X: %v\n", addr, err)
+	}
+
+	// 如果所有高地址都失败，尝试让系统自动选择
+	Printf("Failed to allocate memory in high address space, letting system choose address...\n")
+	baseAddress, err := VirtualAllocEx(hProcess, 0, size,
+		windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
+	if err != nil {
+		return 0, fmt.Errorf("Failed to allocate invisible memory: %v", err)
+	}
+	Printf("System selected address for invisible memory: 0x%X\n", baseAddress)
+	return baseAddress, nil
+}
+
 // ManualMapDLL loads DLL using manual mapping method
 func ManualMapDLL(hProcess windows.Handle, dllBytes []byte) (uintptr, error) {
 	// 检查参数
@@ -118,79 +164,6 @@ func ManualMapDLL(hProcess windows.Handle, dllBytes []byte) (uintptr, error) {
 		return 0, fmt.Errorf("Failed to allocate memory in target process: %v", err)
 	}
 	Printf("Successfully allocated memory at address 0x%X\n", baseAddress)
-
-	/*
-		if options.InvisibleMemory {
-			// 尝试在高地址空间分配内存，如果失败则尝试让系统自动选择地址
-			// 使用几个不同的高地址尝试
-			Printf("Attempting to allocate invisible memory in high address space...\n")
-
-			// 获取适合当前架构的高地址
-			var highAddresses []uintptr
-			if unsafe.Sizeof(uintptr(0)) == 8 {
-				// 64位系统 - 使用运行时计算避免编译时常量溢出
-				// 将计算分解为多个步骤，确保编译器无法在编译时预计算
-				shift := uint(28)
-				base1 := uint64(0x7FFF)
-				base2 := uint64(0x7FFE)
-				base3 := uint64(0x7FFD)
-
-				highAddresses = []uintptr{
-					uintptr(base1 << shift), // 0x7FFF0000000
-					uintptr(base2 << shift), // 0x7FFE0000000
-					uintptr(base3 << shift), // 0x7FFD0000000
-					0x70000000,
-				}
-			} else {
-				// 32位系统
-				highAddresses = []uintptr{0x70000000, 0x60000000, 0x50000000, 0x40000000}
-			}
-
-			for _, addr := range highAddresses {
-				Printf("Trying to allocate memory at address 0x%X...\n", addr)
-				baseAddress, memAllocErr = VirtualAllocEx(hProcess, addr, uintptr(imageSize),
-					windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
-				if memAllocErr == nil {
-					Printf("Successfully allocated memory at address 0x%X\n", baseAddress)
-					break // 成功分配了内存
-				}
-				Printf("Failed to allocate at 0x%X: %v\n", addr, memAllocErr)
-			}
-
-			// 如果所有高地址都失败，尝试让系统自动选择
-			if memAllocErr != nil {
-				Printf("Failed to allocate memory in high address space, letting system choose address...\n")
-				baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
-					windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
-				if err != nil {
-					return 0, fmt.Errorf("Failed to allocate memory in target process: %v", err)
-				}
-				Printf("System selected address: 0x%X\n", baseAddress)
-			}
-		} else {
-			// 正常分配内存，让系统自动选择地址
-			Printf("Letting system choose memory address...\n")
-
-			// 添加详细的调试信息
-			Printf("Process handle: 0x%X\n", hProcess)
-			Printf("Image size: %d bytes (0x%X)\n", imageSize, imageSize)
-
-			// 验证imageSize是否合理
-			if imageSize == 0 {
-				return 0, fmt.Errorf("Invalid image size: %d", imageSize)
-			}
-			if imageSize > 0x10000000 { // 256MB限制
-				return 0, fmt.Errorf("Image size too large: %d bytes", imageSize)
-			}
-
-			baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
-				windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
-			if err != nil {
-				return 0, fmt.Errorf("Failed to allocate memory in target process (size: %d): %v", imageSize, err)
-			}
-			Printf("System allocated memory at address: 0x%X\n", baseAddress)
-		}
-	*/
 
 	// 映射PE文件各节到远程进程内存
 	Printf("Starting to map PE sections to remote process memory...\n")

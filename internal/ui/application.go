@@ -1066,166 +1066,494 @@ func (app *Application) updateBypassOptionsState() {
 	// When there are incompatible option combinations, save them here
 	var incompatibilities []string
 
+	// First, apply injection method specific compatibility rules
+	app.applyInjectionMethodCompatibility(&incompatibilities)
+
+	// Then apply general bypass option compatibility rules
+	app.applyGeneralBypassCompatibility(&incompatibilities)
+
+	// Show incompatibilities if any
+	if len(incompatibilities) > 0 {
+		app.logger.Warn("Bypass option incompatibilities detected", zap.Strings("incompatibilities", incompatibilities))
+		// Show dialog to user
+		dialog.ShowInformation("Bypass Option Conflicts",
+			fmt.Sprintf("Some bypass options were automatically adjusted due to conflicts:\n\n%s",
+				strings.Join(incompatibilities, "\n")), app.mainWindow)
+	}
+}
+
+// applyInjectionMethodCompatibility applies compatibility rules based on injection method
+func (app *Application) applyInjectionMethodCompatibility(incompatibilities *[]string) {
+	method := injector.InjectionMethod(app.injectionMethod)
+
+	switch method {
+	case injector.StandardInjection:
+		app.applyStandardInjectionCompatibility(incompatibilities)
+	case injector.SetWindowsHookExInjection:
+		app.applySetWindowsHookExCompatibility(incompatibilities)
+	case injector.QueueUserAPCInjection:
+		app.applyQueueUserAPCCompatibility(incompatibilities)
+	case injector.EarlyBirdAPCInjection:
+		app.applyEarlyBirdAPCCompatibility(incompatibilities)
+	case injector.DllNotificationInjection:
+		app.applyDllNotificationCompatibility(incompatibilities)
+	case injector.CryoBirdInjection:
+		app.applyCryoBirdCompatibility(incompatibilities)
+	}
+}
+
+// applyStandardInjectionCompatibility applies compatibility rules for Standard Injection
+func (app *Application) applyStandardInjectionCompatibility(incompatibilities *[]string) {
+	// Standard injection supports most bypass options
+	// Enable all compatible options
+	app.enableBypassOption("Load DLL from Memory")
+	app.enableBypassOption("Erase PE Header")
+	app.enableBypassOption("Erase Entry Point")
+	app.enableBypassOption("Manual Mapping")
+	app.enableBypassOption("Map to Hidden Memory")
+	app.enableBypassOption("Path Spoofing")
+	app.enableBypassOption("Use Legitimate Process")
+	app.enableBypassOption("PTE Modification")
+	app.enableBypassOption("VAD Manipulation")
+	app.enableBypassOption("Remove VAD Node")
+	app.enableBypassOption("Allocate Behind Thread Stack")
+	app.enableBypassOption("Direct Syscalls")
+
+	// Enhanced options
+	app.enableBypassOption("Randomize Allocation")
+	app.enableBypassOption("Delayed Execution")
+	app.enableBypassOption("Multi-Stage Injection")
+	app.enableBypassOption("Anti-Debug Techniques")
+	app.enableBypassOption("Process Hollowing")
+	app.enableBypassOption("Atom Bombing")
+	app.enableBypassOption("Process Doppelganging")
+	app.enableBypassOption("Ghost Writing")
+	app.enableBypassOption("Module Stomping")
+	app.enableBypassOption("Thread Hijacking")
+	app.enableBypassOption("Memory Fluctuation")
+	app.enableBypassOption("Anti-VM Techniques")
+	app.enableBypassOption("Process Mirroring")
+	app.enableBypassOption("Stealthy Threads")
+
+	// APC Queueing is not compatible with Standard Injection
+	if app.apcQueueing {
+		*incompatibilities = append(*incompatibilities, "'APC Queueing' is not compatible with 'Standard Injection'")
+		app.apcQueueing = false
+		app.disableBypassOption("APC Queueing")
+	} else {
+		app.disableBypassOption("APC Queueing")
+	}
+}
+
+// applySetWindowsHookExCompatibility applies compatibility rules for SetWindowsHookEx Injection
+func (app *Application) applySetWindowsHookExCompatibility(incompatibilities *[]string) {
+	// SetWindowsHookEx requires DLL file on disk, not compatible with memory-based options
+
+	// Disable memory-based options
+	if app.memoryLoad {
+		*incompatibilities = append(*incompatibilities, "'Load DLL from Memory' is not compatible with 'SetWindowsHookEx Injection'")
+		app.memoryLoad = false
+		app.disableBypassOption("Load DLL from Memory")
+	} else {
+		app.disableBypassOption("Load DLL from Memory")
+	}
+
+	if app.manualMapping {
+		*incompatibilities = append(*incompatibilities, "'Manual Mapping' is not compatible with 'SetWindowsHookEx Injection'")
+		app.manualMapping = false
+		app.disableBypassOption("Manual Mapping")
+	} else {
+		app.disableBypassOption("Manual Mapping")
+	}
+
+	if app.invisibleMemory {
+		*incompatibilities = append(*incompatibilities, "'Map to Hidden Memory' is not compatible with 'SetWindowsHookEx Injection'")
+		app.invisibleMemory = false
+		app.disableBypassOption("Map to Hidden Memory")
+	} else {
+		app.disableBypassOption("Map to Hidden Memory")
+	}
+
+	// Disable process-specific options (hook affects all processes)
+	if app.legitProcessInjection {
+		*incompatibilities = append(*incompatibilities, "'Use Legitimate Process' is not compatible with 'SetWindowsHookEx Injection'")
+		app.legitProcessInjection = false
+		app.disableBypassOption("Use Legitimate Process")
+	} else {
+		app.disableBypassOption("Use Legitimate Process")
+	}
+
+	// Enable compatible options
+	app.enableBypassOption("Path Spoofing")
+	app.enableBypassOption("Erase PE Header")
+	app.enableBypassOption("Erase Entry Point")
+	app.enableBypassOption("Anti-Debug Techniques")
+	app.enableBypassOption("Anti-VM Techniques")
+
+	// Disable advanced memory manipulation options
+	app.disableBypassOption("PTE Modification")
+	app.disableBypassOption("VAD Manipulation")
+	app.disableBypassOption("Remove VAD Node")
+	app.disableBypassOption("Allocate Behind Thread Stack")
+	app.disableBypassOption("Direct Syscalls")
+	app.disableBypassOption("Process Hollowing")
+	app.disableBypassOption("Thread Hijacking")
+	app.disableBypassOption("Memory Fluctuation")
+	app.disableBypassOption("APC Queueing")
+}
+
+// applyQueueUserAPCCompatibility applies compatibility rules for QueueUserAPC Injection
+func (app *Application) applyQueueUserAPCCompatibility(incompatibilities *[]string) {
+	// QueueUserAPC supports most options but has some limitations
+
+	// Enable most bypass options
+	app.enableBypassOption("Load DLL from Memory")
+	app.enableBypassOption("Erase PE Header")
+	app.enableBypassOption("Erase Entry Point")
+	app.enableBypassOption("Manual Mapping")
+	app.enableBypassOption("Map to Hidden Memory")
+	app.enableBypassOption("Path Spoofing")
+	app.enableBypassOption("Use Legitimate Process")
+	app.enableBypassOption("PTE Modification")
+	app.enableBypassOption("VAD Manipulation")
+	app.enableBypassOption("Remove VAD Node")
+	app.enableBypassOption("Allocate Behind Thread Stack")
+	app.enableBypassOption("Direct Syscalls")
+
+	// Enhanced APC-specific options
+	app.enableBypassOption("APC Queueing")
+	app.enableBypassOption("Thread Hijacking")
+	app.enableBypassOption("Delayed Execution")
+	app.enableBypassOption("Anti-Debug Techniques")
+	app.enableBypassOption("Anti-VM Techniques")
+
+	// Some advanced techniques may interfere with APC mechanism
+	app.enableBypassOption("Randomize Allocation")
+	app.enableBypassOption("Multi-Stage Injection")
+	app.enableBypassOption("Memory Fluctuation")
+
+	// Process hollowing not compatible with APC injection
+	if app.processHollowing {
+		*incompatibilities = append(*incompatibilities, "'Process Hollowing' is not compatible with 'QueueUserAPC Injection'")
+		app.processHollowing = false
+		app.disableBypassOption("Process Hollowing")
+	} else {
+		app.disableBypassOption("Process Hollowing")
+	}
+}
+
+// applyEarlyBirdAPCCompatibility applies compatibility rules for Early Bird APC Injection
+func (app *Application) applyEarlyBirdAPCCompatibility(incompatibilities *[]string) {
+	// Early Bird APC creates new process, so some options don't apply
+
+	// Legitimate process injection not applicable (creates new process)
+	if app.legitProcessInjection {
+		*incompatibilities = append(*incompatibilities, "'Use Legitimate Process' is not compatible with 'Early Bird APC Injection'")
+		app.legitProcessInjection = false
+		app.disableBypassOption("Use Legitimate Process")
+	} else {
+		app.disableBypassOption("Use Legitimate Process")
+	}
+
+	// Enable compatible options
+	app.enableBypassOption("Load DLL from Memory")
+	app.enableBypassOption("Erase PE Header")
+	app.enableBypassOption("Erase Entry Point")
+	app.enableBypassOption("Manual Mapping")
+	app.enableBypassOption("Map to Hidden Memory")
+	app.enableBypassOption("Path Spoofing")
+	app.enableBypassOption("PTE Modification")
+	app.enableBypassOption("VAD Manipulation")
+	app.enableBypassOption("Remove VAD Node")
+	app.enableBypassOption("Allocate Behind Thread Stack")
+	app.enableBypassOption("Direct Syscalls")
+
+	// Enhanced options that work well with Early Bird
+	app.enableBypassOption("APC Queueing")
+	app.enableBypassOption("Randomize Allocation")
+	app.enableBypassOption("Delayed Execution")
+	app.enableBypassOption("Multi-Stage Injection")
+	app.enableBypassOption("Anti-Debug Techniques")
+	app.enableBypassOption("Process Hollowing") // Can be combined
+	app.enableBypassOption("Thread Hijacking")
+	app.enableBypassOption("Memory Fluctuation")
+	app.enableBypassOption("Anti-VM Techniques")
+	app.enableBypassOption("Process Mirroring")
+	app.enableBypassOption("Stealthy Threads")
+}
+
+// applyDllNotificationCompatibility applies compatibility rules for DLL Notification Injection
+func (app *Application) applyDllNotificationCompatibility(incompatibilities *[]string) {
+	// DLL Notification currently uses standard injection internally
+	// Apply similar rules as standard injection but with some limitations
+
+	app.enableBypassOption("Load DLL from Memory")
+	app.enableBypassOption("Erase PE Header")
+	app.enableBypassOption("Erase Entry Point")
+	app.enableBypassOption("Manual Mapping")
+	app.enableBypassOption("Map to Hidden Memory")
+	app.enableBypassOption("Path Spoofing")
+	app.enableBypassOption("Use Legitimate Process")
+	app.enableBypassOption("PTE Modification")
+	app.enableBypassOption("VAD Manipulation")
+	app.enableBypassOption("Remove VAD Node")
+	app.enableBypassOption("Allocate Behind Thread Stack")
+	app.enableBypassOption("Direct Syscalls")
+
+	// Enhanced options
+	app.enableBypassOption("Randomize Allocation")
+	app.enableBypassOption("Delayed Execution")
+	app.enableBypassOption("Multi-Stage Injection")
+	app.enableBypassOption("Anti-Debug Techniques")
+	app.enableBypassOption("Thread Hijacking")
+	app.enableBypassOption("Memory Fluctuation")
+	app.enableBypassOption("Anti-VM Techniques")
+
+	// APC-related options not applicable
+	app.disableBypassOption("APC Queueing")
+
+	// Process hollowing may interfere with notification mechanism
+	if app.processHollowing {
+		*incompatibilities = append(*incompatibilities, "'Process Hollowing' may interfere with 'DLL Notification Injection'")
+		app.processHollowing = false
+		app.disableBypassOption("Process Hollowing")
+	} else {
+		app.disableBypassOption("Process Hollowing")
+	}
+}
+
+// applyCryoBirdCompatibility applies compatibility rules for Job Object (CryoBird) Injection
+func (app *Application) applyCryoBirdCompatibility(incompatibilities *[]string) {
+	// CryoBird freezes existing process, then uses standard injection
+	// Similar to standard injection but with some limitations
+
+	// Legitimate process injection not applicable (targets existing process)
+	if app.legitProcessInjection {
+		*incompatibilities = append(*incompatibilities, "'Use Legitimate Process' is not compatible with 'Job Object Injection'")
+		app.legitProcessInjection = false
+		app.disableBypassOption("Use Legitimate Process")
+	} else {
+		app.disableBypassOption("Use Legitimate Process")
+	}
+
+	// Enable most bypass options
+	app.enableBypassOption("Load DLL from Memory")
+	app.enableBypassOption("Erase PE Header")
+	app.enableBypassOption("Erase Entry Point")
+	app.enableBypassOption("Manual Mapping")
+	app.enableBypassOption("Map to Hidden Memory")
+	app.enableBypassOption("Path Spoofing")
+	app.enableBypassOption("PTE Modification")
+	app.enableBypassOption("VAD Manipulation")
+	app.enableBypassOption("Remove VAD Node")
+	app.enableBypassOption("Allocate Behind Thread Stack")
+	app.enableBypassOption("Direct Syscalls")
+
+	// Enhanced options that work with frozen process
+	app.enableBypassOption("Randomize Allocation")
+	app.enableBypassOption("Delayed Execution")
+	app.enableBypassOption("Multi-Stage Injection")
+	app.enableBypassOption("Anti-Debug Techniques")
+	app.enableBypassOption("Thread Hijacking")
+	app.enableBypassOption("Memory Fluctuation")
+	app.enableBypassOption("Anti-VM Techniques")
+	app.enableBypassOption("Process Mirroring")
+	app.enableBypassOption("Stealthy Threads")
+
+	// APC options not applicable (process is frozen)
+	app.disableBypassOption("APC Queueing")
+
+	// Process hollowing not applicable (targets existing process)
+	if app.processHollowing {
+		*incompatibilities = append(*incompatibilities, "'Process Hollowing' is not compatible with 'Job Object Injection'")
+		app.processHollowing = false
+		app.disableBypassOption("Process Hollowing")
+	} else {
+		app.disableBypassOption("Process Hollowing")
+	}
+}
+
+// applyGeneralBypassCompatibility applies general bypass option compatibility rules
+func (app *Application) applyGeneralBypassCompatibility(incompatibilities *[]string) {
 	// Manual mapping requires memory loading
 	if app.manualMapping {
 		app.memoryLoad = true
 		app.bypassCheckboxes["Load DLL from Memory"].SetChecked(true)
 		app.bypassCheckboxes["Load DLL from Memory"].Disable()
-	} else {
-		app.bypassCheckboxes["Load DLL from Memory"].Enable()
 	}
 
 	// Hidden memory region only valid with manual mapping
 	if !app.manualMapping {
-		app.invisibleMemory = false
-		app.bypassCheckboxes["Map to Hidden Memory"].SetChecked(false)
-		app.bypassCheckboxes["Map to Hidden Memory"].Disable()
-	} else {
-		app.bypassCheckboxes["Map to Hidden Memory"].Enable()
-	}
-
-	// Early Bird and Cryo Bird injection don't need target process selection, restart the process
-	if app.injectionMethod == int(injector.EarlyBirdAPCInjection) ||
-		app.injectionMethod == int(injector.CryoBirdInjection) {
-		// Legitimate process injection not applicable to these methods
-		if app.legitProcessInjection {
-			incompatibilities = append(incompatibilities, fmt.Sprintf(
-				"'Use Legitimate Process' is not compatible with '%s' injection method",
-				app.selectedMethod,
-			))
+		if app.invisibleMemory {
+			*incompatibilities = append(*incompatibilities, "'Map to Hidden Memory' requires 'Manual Mapping' to be enabled")
+			app.invisibleMemory = false
+			app.disableBypassOption("Map to Hidden Memory")
+		} else {
+			app.disableBypassOption("Map to Hidden Memory")
 		}
-
-		app.legitProcessInjection = false
-		app.bypassCheckboxes["Use Legitimate Process"].SetChecked(false)
-		app.bypassCheckboxes["Use Legitimate Process"].Disable()
-	} else {
-		app.bypassCheckboxes["Use Legitimate Process"].Enable()
 	}
 
-	// Path spoofing and memory loading are mutually exclusive
+	// Memory load and path spoofing are mutually exclusive
 	if app.memoryLoad && app.pathSpoofing {
-		incompatibilities = append(incompatibilities, "'Path Spoofing' is not compatible with 'Load DLL from Memory'")
-	}
-
-	if app.memoryLoad {
+		*incompatibilities = append(*incompatibilities, "'Load DLL from Memory' and 'Path Spoofing' are mutually exclusive")
 		app.pathSpoofing = false
 		app.bypassCheckboxes["Path Spoofing"].SetChecked(false)
-		app.bypassCheckboxes["Path Spoofing"].Disable()
-	} else {
-		app.bypassCheckboxes["Path Spoofing"].Enable()
 	}
 
-	// PTE and VAD are mutually exclusive
-	if app.pteSpoofing && app.vadManipulation {
-		incompatibilities = append(incompatibilities, "'PTE Modification' is not compatible with 'VAD Manipulation'")
+	// PE header and entry point erasure work best with manual mapping
+	if (app.peHeaderErasure || app.entryPointErase) && !app.manualMapping {
+		// Don't force disable, but warn that it's less effective
+		app.logger.Warn("PE Header/Entry Point erasure is most effective with Manual Mapping enabled")
 	}
 
-	if app.pteSpoofing {
-		app.bypassCheckboxes["VAD Manipulation"].Disable()
-		app.bypassCheckboxes["Remove VAD Node"].Disable()
-	} else {
-		app.bypassCheckboxes["VAD Manipulation"].Enable()
-		// Remove VAD node is only available when VAD manipulation is enabled
-		if app.vadManipulation {
-			app.bypassCheckboxes["Remove VAD Node"].Enable()
-		} else {
-			app.bypassCheckboxes["Remove VAD Node"].Disable()
+	// Advanced memory techniques require manual mapping for full effectiveness
+	advancedMemoryOptions := []string{"PTE Modification", "VAD Manipulation", "Remove VAD Node"}
+	for _, option := range advancedMemoryOptions {
+		if app.isOptionEnabled(option) && !app.manualMapping {
+			app.logger.Warn(fmt.Sprintf("%s is most effective with Manual Mapping enabled", option))
 		}
 	}
 
-	// Enhanced options mutual exclusivity checks
-
-	// Process hollowing and process doppelganging are mutually exclusive
-	if app.processHollowing && app.doppelgangingProcess {
-		incompatibilities = append(incompatibilities, "'Process Hollowing' is not compatible with 'Process Doppelganging'")
-
-		// Default to keeping Process Hollowing and disabling Process Doppelganging
-		app.doppelgangingProcess = false
-		app.bypassCheckboxes["Process Doppelganging"].SetChecked(false)
+	// Process hollowing and thread hijacking are mutually exclusive
+	if app.processHollowing && app.threadHijacking {
+		*incompatibilities = append(*incompatibilities, "'Process Hollowing' and 'Thread Hijacking' are mutually exclusive")
+		app.threadHijacking = false
+		app.bypassCheckboxes["Thread Hijacking"].SetChecked(false)
 	}
+}
 
-	// Thread hijacking and stealthy threads are mutually exclusive
-	if app.threadHijacking && app.stealthyThreads {
-		incompatibilities = append(incompatibilities, "'Thread Hijacking' is not compatible with 'Stealthy Threads'")
-
-		// Default to keeping Thread Hijacking and disabling Stealthy Threads
-		app.stealthyThreads = false
-		app.bypassCheckboxes["Stealthy Threads"].SetChecked(false)
+// enableBypassOption enables a bypass option checkbox
+func (app *Application) enableBypassOption(optionName string) {
+	if checkbox, exists := app.bypassCheckboxes[optionName]; exists {
+		checkbox.Enable()
 	}
+}
 
-	// Process hollowing requires memory loading
-	if app.processHollowing && !app.memoryLoad {
-		app.memoryLoad = true
-		app.bypassCheckboxes["Load DLL from Memory"].SetChecked(true)
-		incompatibilities = append(incompatibilities, "'Process Hollowing' requires 'Load DLL from Memory'")
-	}
+// disableBypassOption disables a bypass option checkbox and unchecks it
+func (app *Application) disableBypassOption(optionName string) {
+	if checkbox, exists := app.bypassCheckboxes[optionName]; exists {
+		checkbox.SetChecked(false)
+		checkbox.Disable()
 
-	// Process doppelganging requires memory loading
-	if app.doppelgangingProcess && !app.memoryLoad {
-		app.memoryLoad = true
-		app.bypassCheckboxes["Load DLL from Memory"].SetChecked(true)
-		incompatibilities = append(incompatibilities, "'Process Doppelganging' requires 'Load DLL from Memory'")
-	}
-
-	// Thread hijacking requires memory loading
-	if app.threadHijacking && !app.memoryLoad {
-		app.memoryLoad = true
-		app.bypassCheckboxes["Load DLL from Memory"].SetChecked(true)
-		incompatibilities = append(incompatibilities, "'Thread Hijacking' requires 'Load DLL from Memory'")
-	}
-
-	// Multi-stage injection requires memory loading
-	if app.multiStageInjection && !app.memoryLoad {
-		app.memoryLoad = true
-		app.bypassCheckboxes["Load DLL from Memory"].SetChecked(true)
-		incompatibilities = append(incompatibilities, "'Multi-Stage Injection' requires 'Load DLL from Memory'")
-	}
-
-	// Memory fluctuation is only applicable with memory loading
-	if app.memoryFluctuation && !app.memoryLoad {
-		app.memoryLoad = true
-		app.bypassCheckboxes["Load DLL from Memory"].SetChecked(true)
-		incompatibilities = append(incompatibilities, "'Memory Fluctuation' requires 'Load DLL from Memory'")
-	}
-
-	// APC queueing and standard injection are not compatible
-	if app.apcQueueing && app.injectionMethod == int(injector.StandardInjection) {
-		incompatibilities = append(incompatibilities, "'APC Queueing' is not compatible with 'Standard Injection'")
-		app.apcQueueing = false
-		app.bypassCheckboxes["APC Queueing"].SetChecked(false)
-	}
-
-	// Process hollowing and standard injection are not compatible
-	if app.processHollowing && app.injectionMethod != int(injector.StandardInjection) {
-		incompatibilities = append(incompatibilities, "'Process Hollowing' requires 'Standard Injection'")
-		app.injectionMethod = int(injector.StandardInjection)
-		app.selectedMethod = "Standard Injection"
-		// Update radio button in UI
-		// Find and update the radio group for injection method
-		if content := app.mainWindow.Content(); content != nil {
-			if scroll, ok := content.(*container.Scroll); ok && scroll.Content != nil {
-				app.updateRadioGroupSelection(scroll.Content, "Standard Injection")
-			}
+		// Update corresponding boolean field
+		switch optionName {
+		case "Load DLL from Memory":
+			app.memoryLoad = false
+		case "Erase PE Header":
+			app.peHeaderErasure = false
+		case "Erase Entry Point":
+			app.entryPointErase = false
+		case "Manual Mapping":
+			app.manualMapping = false
+		case "Map to Hidden Memory":
+			app.invisibleMemory = false
+		case "Path Spoofing":
+			app.pathSpoofing = false
+		case "Use Legitimate Process":
+			app.legitProcessInjection = false
+		case "PTE Modification":
+			app.pteSpoofing = false
+		case "VAD Manipulation":
+			app.vadManipulation = false
+		case "Remove VAD Node":
+			app.removeVADNode = false
+		case "Allocate Behind Thread Stack":
+			app.allocBehindThreadStack = false
+		case "Direct Syscalls":
+			app.directSyscalls = false
+		case "Randomize Allocation":
+			app.randomizeAllocation = false
+		case "Delayed Execution":
+			app.delayedExecution = false
+		case "Multi-Stage Injection":
+			app.multiStageInjection = false
+		case "Anti-Debug Techniques":
+			app.antiDebugTechniques = false
+		case "Process Hollowing":
+			app.processHollowing = false
+		case "Atom Bombing":
+			app.atomBombing = false
+		case "Process Doppelganging":
+			app.doppelgangingProcess = false
+		case "Ghost Writing":
+			app.ghostWriting = false
+		case "Module Stomping":
+			app.moduleStomping = false
+		case "Thread Hijacking":
+			app.threadHijacking = false
+		case "APC Queueing":
+			app.apcQueueing = false
+		case "Memory Fluctuation":
+			app.memoryFluctuation = false
+		case "Anti-VM Techniques":
+			app.antiVMTechniques = false
+		case "Process Mirroring":
+			app.processMirroring = false
+		case "Stealthy Threads":
+			app.stealthyThreads = false
 		}
 	}
+}
 
-	// If there are mutual conflicts, show warning dialog
-	if len(incompatibilities) > 0 {
-		message := "Detected the following mutually exclusive options:\n\n"
-		for _, incomp := range incompatibilities {
-			message += "• " + incomp + "\n"
-		}
-		message += "\nAutomatically adjusted to compatible option combinations."
-
-		go func() {
-			// Execute UI operations in main thread
-			fyne.Do(func() {
-				dialog.ShowInformation("Option Conflict Alert", message, app.mainWindow)
-
-				app.logger.Warn("Detected mutually exclusive options",
-					zap.Strings("conflicts", incompatibilities))
-			})
-		}()
+// isOptionEnabled checks if a bypass option is currently enabled
+func (app *Application) isOptionEnabled(optionName string) bool {
+	switch optionName {
+	case "Load DLL from Memory":
+		return app.memoryLoad
+	case "Erase PE Header":
+		return app.peHeaderErasure
+	case "Erase Entry Point":
+		return app.entryPointErase
+	case "Manual Mapping":
+		return app.manualMapping
+	case "Map to Hidden Memory":
+		return app.invisibleMemory
+	case "Path Spoofing":
+		return app.pathSpoofing
+	case "Use Legitimate Process":
+		return app.legitProcessInjection
+	case "PTE Modification":
+		return app.pteSpoofing
+	case "VAD Manipulation":
+		return app.vadManipulation
+	case "Remove VAD Node":
+		return app.removeVADNode
+	case "Allocate Behind Thread Stack":
+		return app.allocBehindThreadStack
+	case "Direct Syscalls":
+		return app.directSyscalls
+	case "Randomize Allocation":
+		return app.randomizeAllocation
+	case "Delayed Execution":
+		return app.delayedExecution
+	case "Multi-Stage Injection":
+		return app.multiStageInjection
+	case "Anti-Debug Techniques":
+		return app.antiDebugTechniques
+	case "Process Hollowing":
+		return app.processHollowing
+	case "Atom Bombing":
+		return app.atomBombing
+	case "Process Doppelganging":
+		return app.doppelgangingProcess
+	case "Ghost Writing":
+		return app.ghostWriting
+	case "Module Stomping":
+		return app.moduleStomping
+	case "Thread Hijacking":
+		return app.threadHijacking
+	case "APC Queueing":
+		return app.apcQueueing
+	case "Memory Fluctuation":
+		return app.memoryFluctuation
+	case "Anti-VM Techniques":
+		return app.antiVMTechniques
+	case "Process Mirroring":
+		return app.processMirroring
+	case "Stealthy Threads":
+		return app.stealthyThreads
+	default:
+		return false
 	}
 }
 
