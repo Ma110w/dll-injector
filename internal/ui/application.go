@@ -309,7 +309,7 @@ func (app *Application) buildTopRow() giu.Widget {
 					giu.InputText(&app.selectedDllPath).Hint("Select DLL file path...").Size(400),
 				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
-					giu.Button("Browse").Size(60, 0).OnClick(func() {
+					giu.Button("Browse").Size(80, 0).OnClick(func() {
 						app.addLogLine("📁 Opening Windows file dialog...")
 						go app.openNativeFileDialog()
 					}),
@@ -385,7 +385,7 @@ func (app *Application) buildAntiDetectionSection() giu.Widget {
 		// Header with dropdown arrow
 		giu.Row(
 			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
-				giu.Label("🛡️ Anti-Detection Options"),
+				giu.Label(">> Anti-Detection Options"),
 			),
 		),
 		giu.Spacing(),
