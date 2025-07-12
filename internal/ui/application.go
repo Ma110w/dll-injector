@@ -3,7 +3,9 @@ package ui
 import (
 	"fmt"
 	"image/color"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -528,6 +530,41 @@ func (app *Application) Run() error {
 	return nil
 }
 
+// openHomePage 打开项目主页
+func (app *Application) openHomePage() {
+	url := "https://github.com/whispin/dll-injector"
+	app.logger.Info("Opening project homepage", zap.String("url", url))
+
+	// 使用系统默认浏览器打开URL
+	err := app.openURL(url)
+	if err != nil {
+		app.logger.Error("Failed to open homepage", zap.Error(err))
+		dialog.ShowError(fmt.Errorf("Failed to open homepage: %v", err), app.mainWindow)
+	}
+}
+
+// openURL 使用系统默认浏览器打开URL
+func (app *Application) openURL(url string) error {
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "rundll32"
+		args = []string{"url.dll,FileProtocolHandler", url}
+	case "darwin":
+		cmd = "open"
+		args = []string{url}
+	case "linux":
+		cmd = "xdg-open"
+		args = []string{url}
+	default:
+		return fmt.Errorf("unsupported platform")
+	}
+
+	return exec.Command(cmd, args...).Start()
+}
+
 // createContent 创建主界面内容
 func (app *Application) createContent() fyne.CanvasObject {
 	// 创建左侧面板
@@ -551,11 +588,18 @@ func (app *Application) createConsolePanel() fyne.CanvasObject {
 	// Create a console panel with a title
 	consoleTitle := widget.NewLabelWithStyle(i18n.T("console_logs"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	// Title bar - buttons removed
+	// Create home button to open GitHub repository
+	homeButton := widget.NewButtonWithIcon("", theme.HomeIcon(), func() {
+		app.openHomePage()
+	})
+	homeButton.Importance = widget.LowImportance
+	homeButton.Resize(fyne.NewSize(32, homeButton.MinSize().Height))
+
+	// Title bar with home button on the right
 	titleBar := container.NewBorder(
 		nil, nil,
 		consoleTitle,
-		nil, // Button area removed
+		homeButton, // Home button on the right
 	)
 
 	// Create console text view - VS Code dark theme colors
