@@ -153,72 +153,170 @@ func (c *consoleLog) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// WriteLog 为zapcore实现的日志写入
+// WriteLog 为zapcore实现的日志写入 - 用户友好版本
 func (c *consoleLog) WriteLog(enc zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) error {
-	// 直接使用纯文本格式，避免特殊字符
-	var sb strings.Builder
-
-	// 添加时间
-	sb.WriteString(time.Now().Format("15:04"))
-	sb.WriteString(" ")
-
-	// 添加日志级别
-	switch entry.Level {
-	case zapcore.InfoLevel:
-		sb.WriteString("INFO")
-	case zapcore.WarnLevel:
-		sb.WriteString("WARN")
-	case zapcore.ErrorLevel:
-		sb.WriteString("ERROR")
-	case zapcore.DebugLevel:
-		sb.WriteString("DEBUG")
-	default:
-		sb.WriteString(entry.Level.String())
-	}
-	sb.WriteString(" ")
-
-	// 添加消息 - 确保直接写入，不做额外处理
-	sb.WriteString(entry.Message)
-
-	// 添加字段
-	if len(fields) > 0 {
-		sb.WriteString(" ")
-		for i, field := range fields {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
-			// 简化字段显示
-			sb.WriteString(field.Key)
-			sb.WriteString(": ")
-
-			// 根据字段类型格式化值，确保字符串类型直接原样写入
-			switch field.Type {
-			case zapcore.StringType:
-				sb.WriteString(field.String)
-			case zapcore.Int64Type, zapcore.Int32Type, zapcore.Int16Type, zapcore.Int8Type:
-				sb.WriteString(strconv.FormatInt(field.Integer, 10))
-			case zapcore.Uint64Type, zapcore.Uint32Type, zapcore.Uint16Type, zapcore.Uint8Type:
-				sb.WriteString(strconv.FormatUint(uint64(field.Integer), 10))
-			case zapcore.BoolType:
-				sb.WriteString(strconv.FormatBool(field.Integer == 1))
-			default:
-				// 直接写入界面的值，避免格式化导致的编码问题
-				if s, ok := field.Interface.(string); ok {
-					sb.WriteString(s)
-				} else {
-					sb.WriteString(fmt.Sprintf("%v", field.Interface))
-				}
-			}
-		}
+	// 过滤掉不重要的日志消息
+	if c.shouldSkipMessage(entry.Message, fields) {
+		return nil
 	}
 
-	// 获取日志文本
-	text := sb.String()
+	// 格式化用户友好的消息
+	message := c.formatUserFriendlyMessage(entry.Message, entry.Level, fields)
+	if message == "" {
+		return nil
+	}
+
+	// 添加时间戳
+	timestamp := time.Now().Format("15:04")
+	text := fmt.Sprintf("%s %s", timestamp, message)
 
 	// 使用通用方法添加日志
 	c.addLogEntry(text)
 
 	return nil
+}
+
+// shouldSkipMessage 判断是否应该跳过某些日志消息
+func (c *consoleLog) shouldSkipMessage(message string, fields []zapcore.Field) bool {
+	// 跳过bypass选项变化的日志（太频繁且不重要）
+	if strings.Contains(message, "Anti-detection option changed") {
+		return true
+	}
+
+	// 跳过兼容性检查的详细日志
+	if strings.Contains(message, "Bypass option incompatibilities detected") {
+		return true
+	}
+
+	// 跳过一些技术细节日志
+	if strings.Contains(message, "PE Header/Entry Point erasure is most effective") {
+		return true
+	}
+
+	return false
+}
+
+// formatUserFriendlyMessage 格式化用户友好的消息
+func (c *consoleLog) formatUserFriendlyMessage(message string, level zapcore.Level, fields []zapcore.Field) string {
+	// 根据消息类型返回用户友好的格式
+	switch {
+	case strings.Contains(message, "DLL Injector starting"):
+		return "🚀 DLL注入器已启动"
+	case strings.Contains(message, "DLL Injector started"):
+		return "✅ 程序初始化完成"
+	case strings.Contains(message, "Application closed"):
+		return "👋 程序已关闭"
+	case strings.Contains(message, "Injection method selected"):
+		method := c.getFieldValue(fields, "method")
+		return fmt.Sprintf("🔧 选择注入方式: %s", c.translateMethod(method))
+	case strings.Contains(message, "Process selected"):
+		name := c.getFieldValue(fields, "name")
+		pid := c.getFieldValue(fields, "PID")
+		return fmt.Sprintf("🎯 选择目标进程: %s (PID: %s)", name, pid)
+	case strings.Contains(message, "Starting DLL injection"):
+		dll := c.getFieldValue(fields, "DLL")
+		process := c.getFieldValue(fields, "Process")
+		return fmt.Sprintf("⚡ 开始注入: %s → %s", c.getFileName(dll), process)
+	case strings.Contains(message, "Starting injection"):
+		method := c.getFieldValue(fields, "method")
+		return fmt.Sprintf("🔄 执行注入 (%s)", c.translateMethod(method))
+	case strings.Contains(message, "Injection successful"):
+		return "✅ 注入成功完成"
+	case strings.Contains(message, "Injection failed"):
+		if level == zapcore.ErrorLevel {
+			reason := c.getFieldValue(fields, "reason")
+			if reason != "" {
+				return fmt.Sprintf("❌ 注入失败: %s", c.translateError(reason))
+			}
+			return "❌ 注入失败"
+		}
+	case strings.Contains(message, "Failed to read DLL file"):
+		return "❌ 无法读取DLL文件"
+	case strings.Contains(message, "Failed to open target process"):
+		return "❌ 无法打开目标进程"
+	case strings.Contains(message, "Manual mapping successful"):
+		return "✅ 手动映射完成"
+	case strings.Contains(message, "injection successful"):
+		return "✅ 注入操作完成"
+	}
+
+	// 对于其他消息，如果是错误级别，显示简化版本
+	if level == zapcore.ErrorLevel {
+		return fmt.Sprintf("❌ %s", message)
+	} else if level == zapcore.WarnLevel {
+		return fmt.Sprintf("⚠️ %s", message)
+	}
+
+	// 默认返回空字符串（跳过）
+	return ""
+}
+
+// getFieldValue 从字段中获取指定键的值
+func (c *consoleLog) getFieldValue(fields []zapcore.Field, key string) string {
+	for _, field := range fields {
+		if field.Key == key {
+			switch field.Type {
+			case zapcore.StringType:
+				return field.String
+			case zapcore.Int64Type, zapcore.Int32Type:
+				return strconv.FormatInt(field.Integer, 10)
+			case zapcore.Uint64Type, zapcore.Uint32Type:
+				return strconv.FormatUint(uint64(field.Integer), 10)
+			default:
+				return fmt.Sprintf("%v", field.Interface)
+			}
+		}
+	}
+	return ""
+}
+
+// translateMethod 翻译注入方法名称
+func (c *consoleLog) translateMethod(method string) string {
+	switch method {
+	case "Standard Injection":
+		return "标准注入"
+	case "SetWindowsHookEx Injection":
+		return "钩子注入"
+	case "QueueUserAPC Injection":
+		return "APC注入"
+	case "Early Bird APC Injection":
+		return "早鸟APC注入"
+	case "DLL Notification Injection":
+		return "DLL通知注入"
+	case "Job Object Cold Injection":
+		return "冷冻进程注入"
+	default:
+		return method
+	}
+}
+
+// translateError 翻译错误信息
+func (c *consoleLog) translateError(reason string) string {
+	switch reason {
+	case "No DLL file selected":
+		return "未选择DLL文件"
+	case "No target process selected":
+		return "未选择目标进程"
+	default:
+		return reason
+	}
+}
+
+// getFileName 从完整路径中提取文件名
+func (c *consoleLog) getFileName(path string) string {
+	if path == "" {
+		return ""
+	}
+	// 提取文件名
+	parts := strings.Split(path, "\\")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	parts = strings.Split(path, "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return path
 }
 
 // Sync 实现zapcore.Core接口所需的Sync方法
@@ -574,19 +672,19 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 			app.logger.Info("Injection method selected", zap.String("method", "Standard Injection"))
 		case "SetWindowsHookEx":
 			app.injectionMethod = int(injector.SetWindowsHookExInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "SetWindowsHookEx Injection"))
+			app.logger.Info("Injection method selected", zap.String("method", "SetWindowsHookEx"))
 		case "QueueUserAPC":
 			app.injectionMethod = int(injector.QueueUserAPCInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "QueueUserAPC Injection"))
+			app.logger.Info("Injection method selected", zap.String("method", "QueueUserAPC"))
 		case "Early Bird":
 			app.injectionMethod = int(injector.EarlyBirdAPCInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "Early Bird APC Injection"))
+			app.logger.Info("Injection method selected", zap.String("method", "Early Bird"))
 		case "DLL Notification":
 			app.injectionMethod = int(injector.DllNotificationInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "DLL Notification Injection"))
+			app.logger.Info("Injection method selected", zap.String("method", "DLL Notification"))
 		case "Job Object":
 			app.injectionMethod = int(injector.CryoBirdInjection)
-			app.logger.Info("Injection method selected", zap.String("method", "Job Object Cold Injection"))
+			app.logger.Info("Injection method selected", zap.String("method", "Job Object"))
 		}
 
 		// Only call updateBypassOptionsState when all options are initialized
@@ -625,13 +723,11 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	// Basic anti-detection options
 	app.bypassCheckboxes["Load DLL from Memory"] = widget.NewCheck("Load DLL from Memory", func(checked bool) {
 		app.memoryLoad = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Load DLL from Memory"), zap.Bool("enabled", checked))
 		app.updateBypassOptionsState()
 	})
 
 	app.bypassCheckboxes["Use Manual Mapping"] = widget.NewCheck("Use Manual Mapping", func(checked bool) {
 		app.manualMapping = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Use Manual Mapping"), zap.Bool("enabled", checked))
 
 		if checked {
 			app.memoryLoad = true
@@ -643,7 +739,6 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 
 	app.bypassCheckboxes["Path Spoofing"] = widget.NewCheck("Path Spoofing", func(checked bool) {
 		app.pathSpoofing = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Path Spoofing"), zap.Bool("enabled", checked))
 	})
 
 	// Use horizontal layout for options with compact spacing
@@ -660,17 +755,15 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	// Memory operation options
 	app.bypassCheckboxes["Erase PE Header"] = widget.NewCheck("Erase PE Header", func(checked bool) {
 		app.peHeaderErasure = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Erase PE Header"), zap.Bool("enabled", checked))
+		// 移除日志记录，减少干扰
 	})
 
 	app.bypassCheckboxes["Erase Entry Point"] = widget.NewCheck("Erase Entry Point", func(checked bool) {
 		app.entryPointErase = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Erase Entry Point"), zap.Bool("enabled", checked))
 	})
 
 	app.bypassCheckboxes["Map to Hidden Memory"] = widget.NewCheck("Map to Hidden Memory", func(checked bool) {
 		app.invisibleMemory = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Map to Hidden Memory"), zap.Bool("enabled", checked))
 	})
 
 	// Use horizontal layout for options
@@ -687,7 +780,6 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	// Advanced anti-detection options
 	app.bypassCheckboxes["PTE Modification"] = widget.NewCheck("PTE Modification", func(checked bool) {
 		app.pteSpoofing = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "PTE Modification"), zap.Bool("enabled", checked))
 
 		if checked && app.vadManipulation {
 			app.vadManipulation = false
@@ -697,7 +789,6 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 
 	app.bypassCheckboxes["VAD Manipulation"] = widget.NewCheck("VAD Manipulation", func(checked bool) {
 		app.vadManipulation = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "VAD Manipulation"), zap.Bool("enabled", checked))
 
 		if checked && app.pteSpoofing {
 			app.pteSpoofing = false
@@ -707,7 +798,6 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 
 	app.bypassCheckboxes["Remove VAD Node"] = widget.NewCheck("Remove VAD Node", func(checked bool) {
 		app.removeVADNode = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Remove VAD Node"), zap.Bool("enabled", checked))
 
 		if checked && !app.vadManipulation {
 			app.vadManipulation = true
@@ -722,17 +812,14 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 
 	app.bypassCheckboxes["Allocate Behind Thread Stack"] = widget.NewCheck("Allocate Behind Thread Stack", func(checked bool) {
 		app.allocBehindThreadStack = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Allocate Behind Thread Stack"), zap.Bool("enabled", checked))
 	})
 
 	app.bypassCheckboxes["Direct Syscalls"] = widget.NewCheck("Direct Syscalls", func(checked bool) {
 		app.directSyscalls = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Direct Syscalls"), zap.Bool("enabled", checked))
 	})
 
 	app.bypassCheckboxes["Use Legitimate Process"] = widget.NewCheck("Use Legitimate Process", func(checked bool) {
 		app.legitProcessInjection = checked
-		app.logger.Info("Anti-detection option changed", zap.String("option", "Use Legitimate Process"), zap.Bool("enabled", checked))
 	})
 
 	// First row of advanced options
@@ -955,7 +1042,6 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 			zap.String("DLL", dllPath),
 			zap.String("Process", app.selectedProc),
 			zap.Int32("PID", app.selectedPID),
-			zap.Int("Method", app.injectionMethod),
 		)
 
 		// Create injector instance
@@ -1074,8 +1160,7 @@ func (app *Application) updateBypassOptionsState() {
 
 	// Show incompatibilities if any
 	if len(incompatibilities) > 0 {
-		app.logger.Warn("Bypass option incompatibilities detected", zap.Strings("incompatibilities", incompatibilities))
-		// Show dialog to user
+		// 只在对话框中显示，不记录到日志（避免干扰）
 		dialog.ShowInformation("Bypass Option Conflicts",
 			fmt.Sprintf("Some bypass options were automatically adjusted due to conflicts:\n\n%s",
 				strings.Join(incompatibilities, "\n")), app.mainWindow)

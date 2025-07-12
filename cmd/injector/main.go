@@ -6,17 +6,17 @@ import (
 )
 
 func main() {
-	// Create new giu-based UI app
-	app := ui.NewGuiApplication("DLL Injector", 1400, 900)
+	// Create UI app first so we can use its logger
+	app := ui.NewApplication("DLL Injector", 1035, 700)
 
 	// Log startup using app's logger (will show in UI)
 	logger := app.Log()
-	logger.Info("DLL Injector starting with new giu interface...")
+	logger.Info("DLL Injector starting")
 
 	// Start the application
 	if err := app.Run(); err != nil {
 		logger.Error("Application runtime error", zap.Error(err))
 	}
 
-	logger.Info("DLL Injector shutting down...")
+	// Closing message is already logged in app.Close()
 }
