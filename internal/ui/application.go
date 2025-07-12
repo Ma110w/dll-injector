@@ -631,10 +631,10 @@ func (app *Application) buildConsoleLogsSection() giu.Widget {
 			),
 		),
 		giu.Spacing(),
-		// Console text area with dark background
+		// Console text area with dark background - use remaining space
 		giu.Style().SetColor(giu.StyleColorFrameBg, color.RGBA{R: 25, G: 25, B: 25, A: 255}).To(
 			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 180, G: 180, B: 180, A: 255}).To(
-				giu.InputTextMultiline(&logText).Size(-1, 120).Flags(giu.InputTextFlagsReadOnly),
+				giu.InputTextMultiline(&logText).Size(-1, -1).Flags(giu.InputTextFlagsReadOnly),
 			),
 		),
 	)
