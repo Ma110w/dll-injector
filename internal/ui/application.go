@@ -9,12 +9,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"unsafe"
 
 	"github.com/AllenDang/giu"
 	"github.com/whispin/dll-injector/internal/injector"
 	"github.com/whispin/dll-injector/internal/process"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/sys/windows"
 )
 
 // Application represents the main GUI application using giu
@@ -76,12 +79,12 @@ type Application struct {
 	showConfirmDialog    bool
 	showProgressDialog   bool
 	showSuccessDialog    bool
-	showProcessDialog    bool  // New: Process selection dialog
+	showProcessDialog    bool  // Process selection dialog
 	confirmDialogText    string
 	progressText         string
 	successText          string
 	selectedTab          int32 // 0=Basic, 1=Advanced, 2=Preset
-	processSearchText    string // New: Search text for process dialog
+	processSearchText    string // Search text for process dialog
 
 	// Mutex for thread safety
 	mu sync.RWMutex
@@ -227,16 +230,23 @@ func (app *Application) refreshProcessList() {
 
 // Run starts the GUI application
 func (app *Application) Run() error {
+	fmt.Println("=== STARTING DLL INJECTOR GUI ===")
 	app.logger.Info("Starting GUI application", zap.String("title", app.title), zap.Int32("width", app.width), zap.Int32("height", app.height))
 
 	// Create master window with explicit flags
 	wnd := giu.NewMasterWindow(app.title, int(app.width), int(app.height), giu.MasterWindowFlagsNotResizable)
 
+	fmt.Println("=== MASTER WINDOW CREATED ===")
 	app.logger.Info("Master window created, starting main loop...")
+
+	// Add initial log entry
+	app.addLogLine("🚀 DLL Injector started")
+	app.addLogLine("📋 Click 'Select Process' to choose target process")
 
 	// Run the main loop
 	wnd.Run(app.loop)
 
+	fmt.Println("=== GUI APPLICATION FINISHED ===")
 	app.logger.Info("GUI application finished")
 	return nil
 }
@@ -277,8 +287,8 @@ func (app *Application) loop() {
 		),
 	)
 
-	// TODO: Render dialogs
-	// app.buildProcessSelectionDialog()
+	// Render dialogs
+	app.buildProcessSelectionDialog()
 }
 
 // buildTopRow builds the top row with DLL File and Target Process
@@ -300,7 +310,8 @@ func (app *Application) buildTopRow() giu.Widget {
 				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 					giu.Button("📁").Size(30, 0).OnClick(func() {
-						fmt.Println("Browse DLL file")
+						app.addLogLine("📁 Opening Windows file dialog...")
+						go app.openNativeFileDialog()
 					}),
 				),
 			),
@@ -319,13 +330,9 @@ func (app *Application) buildTopRow() giu.Widget {
 				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 					giu.Button("Select Process").OnClick(func() {
-						// Simple test - just select a dummy process for now
-						app.selectedPID = 1234
-						app.selectedProcessName = "notepad.exe"
-						app.addLogLine("✓ Process selected: notepad.exe (PID: 1234)")
-
-						// TODO: Implement proper process selection dialog
-						// For now, we'll use a simple hardcoded selection
+						app.addLogLine("🔍 Opening process selection...")
+						app.refreshProcessList()
+						app.showProcessDialog = true
 					}),
 				),
 			),
@@ -601,71 +608,246 @@ func (app *Application) buildProcessSelectionDialog() {
 		return
 	}
 
-	fmt.Println("=== BUILDING PROCESS SELECTION DIALOG ===")
+	giu.Window("Select Target Process").
+		IsOpen(&app.showProcessDialog).
+		Size(900, 500).
+		Flags(giu.WindowFlagsNoResize|giu.WindowFlagsNoCollapse).
+		Layout(
+			giu.Column(
+				// Header
+				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
+					giu.Label("Select Target Process for DLL Injection"),
+				),
+				giu.Separator(),
+				giu.Spacing(),
 
-	giu.Window("Select Target Process").IsOpen(&app.showProcessDialog).Size(800, 600).Layout(
-		giu.Column(
-			// Simple test content first
-			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 255, G: 255, B: 255, A: 255}).To(
-				giu.Label("Process Selection Dialog"),
-			),
-			giu.Separator(),
-			giu.Spacing(),
-
-			// Search section
-			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
-				giu.Label("Search Processes:"),
-			),
-			giu.InputText(&app.processSearchText).Hint("Type to search processes..."),
-			giu.Spacing(),
-
-			// Simple process list for now
-			giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
-				giu.Label("Available Processes:"),
-			),
-			giu.Separator(),
-
-			// Test process entries
-			giu.Row(
-				giu.Label("1234 - notepad.exe"),
-				giu.Button("Select").OnClick(func() {
-					app.selectedPID = 1234
-					app.selectedProcessName = "notepad.exe"
-					app.showProcessDialog = false
-					app.addLogLine("✓ Process selected: notepad.exe (PID: 1234)")
-					fmt.Println("Test process selected")
-				}),
-			),
-			giu.Row(
-				giu.Label("5678 - chrome.exe"),
-				giu.Button("Select").OnClick(func() {
-					app.selectedPID = 5678
-					app.selectedProcessName = "chrome.exe"
-					app.showProcessDialog = false
-					app.addLogLine("✓ Process selected: chrome.exe (PID: 5678)")
-					fmt.Println("Test process selected")
-				}),
-			),
-
-			giu.Spacing(),
-			// Dialog buttons
-			giu.Row(
-				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
-					giu.Button("Refresh").OnClick(func() {
+				// Search section
+				giu.Row(
+					giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
+						giu.Label("Search:"),
+					),
+					giu.InputText(&app.processSearchText).Hint("Type process name, PID, or path...").Size(400),
+					giu.Button("Refresh List").OnClick(func() {
 						app.refreshProcessList()
-						fmt.Println("Process list refreshed")
+						app.addLogLine("🔄 Process list refreshed")
 					}),
 				),
-				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
-					giu.Button("Cancel").OnClick(func() {
-						app.showProcessDialog = false
-						app.processSearchText = "" // Clear search
-						fmt.Println("Dialog cancelled")
-					}),
+				giu.Spacing(),
+
+				// Process list header
+				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 200, G: 200, B: 200, A: 255}).To(
+					giu.Row(
+						giu.Label("PID"),
+						giu.Dummy(80, 0),
+						giu.Label("Process Name"),
+						giu.Dummy(150, 0),
+						giu.Label("Executable Path"),
+						giu.Dummy(300, 0),
+						giu.Label("Action"),
+					),
+				),
+				giu.Separator(),
+
+				// Scrollable process list
+				giu.Child().Size(-1, 300).Layout(
+					app.buildProcessListContent(),
+				),
+
+				giu.Spacing(),
+				// Bottom buttons
+				giu.Row(
+					giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
+						giu.Button("Cancel").Size(100, 30).OnClick(func() {
+							app.showProcessDialog = false
+							app.processSearchText = ""
+							app.addLogLine("❌ Process selection cancelled")
+						}),
+					),
 				),
 			),
+		)
+}
+
+// buildProcessListContent builds the scrollable process list content
+func (app *Application) buildProcessListContent() giu.Widget {
+	app.mu.RLock()
+	processes := make([]process.ProcessEntry, len(app.processes))
+	copy(processes, app.processes)
+	app.mu.RUnlock()
+
+	// Filter processes based on search text
+	var filteredProcesses []process.ProcessEntry
+	searchLower := strings.ToLower(app.processSearchText)
+
+	for _, proc := range processes {
+		if searchLower == "" ||
+			strings.Contains(strings.ToLower(proc.Name), searchLower) ||
+			strings.Contains(strings.ToLower(proc.Executable), searchLower) ||
+			strings.Contains(strconv.FormatInt(int64(proc.PID), 10), searchLower) {
+			filteredProcesses = append(filteredProcesses, proc)
+		}
+	}
+
+	// Limit processes for performance
+	maxProcesses := 50
+	if len(filteredProcesses) > maxProcesses {
+		filteredProcesses = filteredProcesses[:maxProcesses]
+	}
+
+	var processWidgets []giu.Widget
+
+	// Add process rows
+	for _, proc := range filteredProcesses {
+		proc := proc // Capture for closure
+
+		// Truncate long paths
+		execPath := proc.Executable
+		if len(execPath) > 50 {
+			execPath = "..." + execPath[len(execPath)-47:]
+		}
+
+		isSelected := proc.PID == app.selectedPID
+
+		var rowWidget giu.Widget
+		if isSelected {
+			// Highlight selected process
+			rowWidget = giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 0, G: 255, B: 0, A: 255}).To(
+				giu.Row(
+					giu.Label(fmt.Sprintf("%d", proc.PID)),
+					giu.Dummy(80, 0),
+					giu.Label(proc.Name),
+					giu.Dummy(150, 0),
+					giu.Label(execPath),
+					giu.Dummy(300, 0),
+					giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
+						giu.Button("✓ Selected").OnClick(func() {
+							app.selectedPID = proc.PID
+							app.selectedProcessName = proc.Name
+							app.showProcessDialog = false
+							app.processSearchText = ""
+							app.addLogLine(fmt.Sprintf("✅ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+						}),
+					),
+				),
+			)
+		} else {
+			rowWidget = giu.Row(
+				giu.Label(fmt.Sprintf("%d", proc.PID)),
+				giu.Dummy(80, 0),
+				giu.Label(proc.Name),
+				giu.Dummy(150, 0),
+				giu.Label(execPath),
+				giu.Dummy(300, 0),
+				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 100, G: 100, B: 100, A: 255}).To(
+					giu.Button("Select").OnClick(func() {
+						app.selectedPID = proc.PID
+						app.selectedProcessName = proc.Name
+						app.showProcessDialog = false
+						app.processSearchText = ""
+						app.addLogLine(fmt.Sprintf("✅ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+					}),
+				),
+			)
+		}
+
+		processWidgets = append(processWidgets, rowWidget)
+	}
+
+	// Add info footer
+	processWidgets = append(processWidgets,
+		giu.Spacing(),
+		giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 150, G: 150, B: 150, A: 255}).To(
+			giu.Label(fmt.Sprintf("Showing %d of %d processes", len(filteredProcesses), len(processes))),
 		),
 	)
+
+	return giu.Column(processWidgets...)
+}
+
+// Legacy file dialog functions removed - now using Windows native dialog
+
+// Legacy file dialog helper functions removed - now using Windows native dialog
+
+// openNativeFileDialog opens Windows native file dialog for DLL selection
+func (app *Application) openNativeFileDialog() {
+	// Use Windows GetOpenFileName API
+	filename, err := app.showWindowsFileDialog()
+	if err != nil {
+		app.addLogLine(fmt.Sprintf("❌ Error opening file dialog: %v", err))
+		return
+	}
+
+	if filename != "" {
+		app.selectedDllPath = filename
+		app.addLogLine(fmt.Sprintf("✅ DLL file selected: %s", filepath.Base(filename)))
+	} else {
+		app.addLogLine("❌ File selection cancelled")
+	}
+}
+
+// showWindowsFileDialog shows Windows native file dialog
+func (app *Application) showWindowsFileDialog() (string, error) {
+	// Load comdlg32.dll
+	comdlg32 := windows.NewLazyDLL("comdlg32.dll")
+	getOpenFileName := comdlg32.NewProc("GetOpenFileNameW")
+
+	// Prepare OPENFILENAME structure
+	var ofn struct {
+		lStructSize       uint32
+		hwndOwner         uintptr
+		hInstance         uintptr
+		lpstrFilter       *uint16
+		lpstrCustomFilter *uint16
+		nMaxCustFilter    uint32
+		nFilterIndex      uint32
+		lpstrFile         *uint16
+		nMaxFile          uint32
+		lpstrFileTitle    *uint16
+		nMaxFileTitle     uint32
+		lpstrInitialDir   *uint16
+		lpstrTitle        *uint16
+		flags             uint32
+		nFileOffset       uint16
+		nFileExtension    uint16
+		lpstrDefExt       *uint16
+		lCustData         uintptr
+		lpfnHook          uintptr
+		lpTemplateName    *uint16
+		pvReserved        uintptr
+		dwReserved        uint32
+		flagsEx           uint32
+	}
+
+	// Prepare filter string: "DLL Files\0*.dll\0All Files\0*.*\0\0"
+	filter := "DLL Files\x00*.dll\x00All Files\x00*.*\x00\x00"
+	filterPtr, _ := syscall.UTF16PtrFromString(filter)
+
+	// Prepare title
+	title := "Select DLL File for Injection"
+	titlePtr, _ := syscall.UTF16PtrFromString(title)
+
+	// Prepare file buffer
+	fileBuffer := make([]uint16, 260) // MAX_PATH
+
+	// Fill OPENFILENAME structure
+	ofn.lStructSize = uint32(unsafe.Sizeof(ofn))
+	ofn.lpstrFilter = filterPtr
+	ofn.lpstrFile = &fileBuffer[0]
+	ofn.nMaxFile = uint32(len(fileBuffer))
+	ofn.lpstrTitle = titlePtr
+	ofn.flags = 0x00080000 | 0x00001000 | 0x00000800 // OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST
+
+	// Call GetOpenFileName
+	ret, _, _ := getOpenFileName.Call(uintptr(unsafe.Pointer(&ofn)))
+
+	if ret == 0 {
+		// User cancelled or error occurred
+		return "", nil
+	}
+
+	// Convert result to string
+	filename := syscall.UTF16ToString(fileBuffer)
+	return filename, nil
 }
 
 // buildProcessTable builds the process table for the dialog
