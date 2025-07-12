@@ -556,12 +556,18 @@ func InlineLabelEntry(labelText string, entry *widget.Entry, button *widget.Butt
 	// Create label with VS Code styling
 	label := widget.NewLabelWithStyle(labelText, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
-	// Use a grid layout to ensure both entry and button are visible
-	// This gives more predictable layout behavior
-	return container.NewGridWithColumns(3,
-		label,  // Column 1: Label
-		entry,  // Column 2: Entry (will take available space)
-		button, // Column 3: Button (fixed size)
+	// Set fixed width for label to ensure consistent alignment - make it narrower
+	label.Resize(fyne.NewSize(70, label.MinSize().Height))
+
+	// Create a compact container for entry and button with minimal spacing
+	entryButtonContainer := container.NewBorder(nil, nil, nil, button, entry)
+
+	// Use border layout with label on left, entry+button taking remaining space
+	return container.NewBorder(
+		nil, nil,
+		label, // Left: Label (fixed width)
+		nil,
+		entryButtonContainer, // Center: Entry + Button (flexible)
 	)
 }
 

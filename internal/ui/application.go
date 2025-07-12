@@ -610,10 +610,10 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 	dllEntry := widget.NewEntryWithData(app.selectedDll)
 	dllEntry.SetPlaceHolder(i18n.T("select_dll_placeholder"))
 	dllEntry.Wrapping = fyne.TextTruncate
-	// Set a reasonable maximum width for the entry
-	dllEntry.Resize(fyne.NewSize(200, dllEntry.MinSize().Height))
+	// Set a more compact width for the entry to make it tighter
+	dllEntry.Resize(fyne.NewSize(300, dllEntry.MinSize().Height))
 
-	browseDllButton := CompactIconButton("", theme.FolderOpenIcon(), func() {
+	browseDllButton := widget.NewButtonWithIcon("", theme.FolderOpenIcon(), func() {
 		fd := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 			if err != nil {
 				app.logger.Error("File selection error", zap.Error(err))
@@ -631,6 +631,8 @@ func (app *Application) createLeftPanel() fyne.CanvasObject {
 		fd.SetFilter(&dllFilter{})
 		fd.Show()
 	})
+	// Make button more compact
+	browseDllButton.Resize(fyne.NewSize(32, browseDllButton.MinSize().Height))
 
 	// Create compact DLL selector with inline label using the new component
 	dllSelector := InlineLabelEntry(i18n.T("dll_file"), dllEntry, browseDllButton)
