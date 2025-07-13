@@ -288,8 +288,15 @@ func FixRelocations(hProcess windows.Handle, baseAddress uintptr, peHeader *PEHe
 			// Calculate target address
 			targetAddr := baseAddress + uintptr(baseReloc.VirtualAddress) + uintptr(offset)
 
+			// Validate target address is within reasonable bounds
+			if targetAddr < baseAddress || targetAddr > baseAddress+uintptr(peHeader.GetSizeOfImage()) {
+				Printf("Warning: Relocation target address 0x%X is outside image bounds (base: 0x%X, size: %d)\n",
+					targetAddr, baseAddress, peHeader.GetSizeOfImage())
+				continue
+			}
+
 			// Apply relocation based on type
-			err = applyRelocation(hProcess, targetAddr, relocType, delta, peHeader.Is64Bit)
+			err = applyRelocationSafe(hProcess, targetAddr, relocType, delta, peHeader.Is64Bit, baseAddress, peHeader.GetSizeOfImage())
 			if err != nil {
 				Printf("Warning: Failed to apply relocation at 0x%X: %v\n", targetAddr, err)
 				continue
@@ -435,7 +442,39 @@ func resolveImportAddressTable(hProcess windows.Handle, iatAddr uintptr, dllHand
 	return nil
 }
 
+// applyRelocationSafe applies relocations with enhanced safety checks
+func applyRelocationSafe(hProcess windows.Handle, targetAddr uintptr, relocType uint16, delta int64, is64Bit bool, baseAddr uintptr, imageSize uint32) error {
+	// Additional safety check - ensure target is within image bounds
+	if targetAddr < baseAddr || targetAddr >= baseAddr+uintptr(imageSize) {
+		return fmt.Errorf("target address 0x%X is outside image bounds", targetAddr)
+	}
+
+	return applyRelocation(hProcess, targetAddr, relocType, delta, is64Bit)
+}
+
 func applyRelocation(hProcess windows.Handle, targetAddr uintptr, relocType uint16, delta int64, is64Bit bool) error {
+	// Temporarily change memory protection to allow writing
+	var oldProtect uint32
+	var pageSize uintptr = 4096 // Standard page size
+
+	// Calculate page-aligned address
+	pageAddr := targetAddr & ^(pageSize - 1)
+
+	// Set memory protection to allow read/write access
+	err := windows.VirtualProtectEx(hProcess, pageAddr, pageSize, windows.PAGE_EXECUTE_READWRITE, &oldProtect)
+	if err != nil {
+		// If we can't change protection, try with a larger size
+		err = windows.VirtualProtectEx(hProcess, pageAddr, pageSize*2, windows.PAGE_EXECUTE_READWRITE, &oldProtect)
+		if err != nil {
+			return fmt.Errorf("failed to change memory protection for relocation: %v", err)
+		}
+	}
+
+	// Ensure we restore protection when done
+	defer func() {
+		windows.VirtualProtectEx(hProcess, pageAddr, pageSize, oldProtect, &oldProtect)
+	}()
+
 	switch relocType {
 	case IMAGE_REL_BASED_HIGHLOW:
 		// 32-bit absolute relocation
@@ -444,7 +483,7 @@ func applyRelocation(hProcess windows.Handle, targetAddr uintptr, relocType uint
 		err := windows.ReadProcessMemory(hProcess, targetAddr,
 			(*byte)(unsafe.Pointer(&value)), 4, &bytesRead)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read 32-bit value at 0x%X: %v", targetAddr, err)
 		}
 
 		newValue := uint32(int64(value) + delta)
@@ -452,7 +491,7 @@ func applyRelocation(hProcess windows.Handle, targetAddr uintptr, relocType uint
 		err = WriteProcessMemory(hProcess, targetAddr,
 			unsafe.Pointer(&newValue), 4, &bytesWritten)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write 32-bit value at 0x%X: %v", targetAddr, err)
 		}
 
 	case IMAGE_REL_BASED_DIR64:
@@ -462,7 +501,7 @@ func applyRelocation(hProcess windows.Handle, targetAddr uintptr, relocType uint
 		err := windows.ReadProcessMemory(hProcess, targetAddr,
 			(*byte)(unsafe.Pointer(&value)), 8, &bytesRead)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read 64-bit value at 0x%X: %v", targetAddr, err)
 		}
 
 		newValue := uint64(int64(value) + delta)
@@ -470,7 +509,7 @@ func applyRelocation(hProcess windows.Handle, targetAddr uintptr, relocType uint
 		err = WriteProcessMemory(hProcess, targetAddr,
 			unsafe.Pointer(&newValue), 8, &bytesWritten)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write 64-bit value at 0x%X: %v", targetAddr, err)
 		}
 
 	case IMAGE_REL_BASED_HIGH:
@@ -480,7 +519,7 @@ func applyRelocation(hProcess windows.Handle, targetAddr uintptr, relocType uint
 		err := windows.ReadProcessMemory(hProcess, targetAddr,
 			(*byte)(unsafe.Pointer(&value)), 2, &bytesRead)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read high 16-bit value at 0x%X: %v", targetAddr, err)
 		}
 
 		newValue := uint16((int64(value) + (delta >> 16)) & 0xFFFF)
@@ -488,7 +527,7 @@ func applyRelocation(hProcess windows.Handle, targetAddr uintptr, relocType uint
 		err = WriteProcessMemory(hProcess, targetAddr,
 			unsafe.Pointer(&newValue), 2, &bytesWritten)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write high 16-bit value at 0x%X: %v", targetAddr, err)
 		}
 
 	case IMAGE_REL_BASED_LOW:
@@ -498,7 +537,7 @@ func applyRelocation(hProcess windows.Handle, targetAddr uintptr, relocType uint
 		err := windows.ReadProcessMemory(hProcess, targetAddr,
 			(*byte)(unsafe.Pointer(&value)), 2, &bytesRead)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read low 16-bit value at 0x%X: %v", targetAddr, err)
 		}
 
 		newValue := uint16((int64(value) + delta) & 0xFFFF)
@@ -506,7 +545,7 @@ func applyRelocation(hProcess windows.Handle, targetAddr uintptr, relocType uint
 		err = WriteProcessMemory(hProcess, targetAddr,
 			unsafe.Pointer(&newValue), 2, &bytesWritten)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write low 16-bit value at 0x%X: %v", targetAddr, err)
 		}
 
 	default:

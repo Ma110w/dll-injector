@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -64,10 +65,66 @@ func (i *Injector) SetMethod(method InjectionMethod) {
 	i.method = method
 }
 
-// SetBypassOptions sets anti-detection options
+// SetBypassOptions sets anti-detection options with compatibility validation
 func (i *Injector) SetBypassOptions(options BypassOptions) {
+	// Validate compatibility between injection method and bypass options
+	i.validateBypassCompatibility(&options)
 	i.bypassOptions = options
 	i.useEnhancedOptions = false
+}
+
+// validateBypassCompatibility checks if bypass options are compatible with injection method
+func (i *Injector) validateBypassCompatibility(options *BypassOptions) {
+	// Check if using safe methods (Memory Load or Manual Mapping)
+	usingSafeMethods := options.MemoryLoad || options.ManualMapping
+
+	// Check PE header erasure compatibility
+	if options.ErasePEHeader {
+		if usingSafeMethods {
+			// Safe combination - no warnings needed
+			i.logger.Debug("PE header erasure enabled with safe injection method")
+		} else {
+			switch i.method {
+			case StandardInjection, QueueUserAPCInjection, EarlyBirdAPCInjection:
+				i.logger.Warn("PE header erasure may cause issues with LoadLibrary-based injection methods")
+				i.logger.Warn("Consider using Memory Load or Manual Mapping for safer PE header erasure")
+
+			case SetWindowsHookExInjection:
+				i.logger.Error("PE header erasure is incompatible with SetWindowsHookEx injection")
+				i.logger.Error("Disabling PE header erasure for SetWindowsHookEx method")
+				options.ErasePEHeader = false
+
+			case DllNotificationInjection:
+				i.logger.Error("PE header erasure is incompatible with DLL notification injection")
+				i.logger.Error("Disabling PE header erasure for DLL notification method")
+				options.ErasePEHeader = false
+			}
+		}
+	}
+
+	// Check entry point erasure compatibility
+	if options.EraseEntryPoint {
+		if usingSafeMethods {
+			// Safe combination - no warnings needed
+			i.logger.Debug("Entry point erasure enabled with safe injection method")
+		} else {
+			switch i.method {
+			case StandardInjection, QueueUserAPCInjection, EarlyBirdAPCInjection:
+				i.logger.Warn("Entry point erasure may cause DLL functionality issues with LoadLibrary-based methods")
+				i.logger.Warn("Consider using Memory Load or Manual Mapping for safer entry point erasure")
+
+			case SetWindowsHookExInjection:
+				i.logger.Error("Entry point erasure may break hook functionality")
+				i.logger.Error("Disabling entry point erasure for SetWindowsHookEx method")
+				options.EraseEntryPoint = false
+			}
+		}
+	}
+
+	// Provide recommendations for optimal combinations
+	if (options.ErasePEHeader || options.EraseEntryPoint) && !usingSafeMethods {
+		i.logger.Info("Recommendation: Enable Memory Load or Manual Mapping for safer PE/entry point erasure")
+	}
 }
 
 // SetEnhancedBypassOptions sets enhanced anti-detection options
@@ -186,10 +243,26 @@ func (i *Injector) Inject() error {
 	return nil
 }
 
-// createTempDllFile creates a temporary file with DLL data
+// createTempDllFile creates a temporary file with DLL data using real DLL names
 func (i *Injector) createTempDllFile(dllBytes []byte) (string, error) {
 	tempDir := os.TempDir()
-	fileName := fmt.Sprintf("temp_dll_%d.dll", i.processID)
+
+	// Use real system DLL names for better stealth
+	realDllNames := []string{
+		"msvcr120.dll",
+		"msvcp120.dll",
+		"vcruntime140.dll",
+		"msvcp140.dll",
+		"ucrtbase.dll",
+		"concrt140.dll",
+		"vccorlib140.dll",
+		"api-ms-win-core-heap-l1-1-0.dll",
+		"api-ms-win-core-synch-l1-2-0.dll",
+		"api-ms-win-core-memory-l1-1-1.dll",
+	}
+
+	// Select a real DLL name based on process ID
+	fileName := realDllNames[i.processID%uint32(len(realDllNames))]
 	tempFile := filepath.Join(tempDir, fileName)
 
 	err := os.WriteFile(tempFile, dllBytes, 0644)
@@ -198,6 +271,73 @@ func (i *Injector) createTempDllFile(dllBytes []byte) (string, error) {
 	}
 
 	return tempFile, nil
+}
+
+// findLoadedDLLBaseAddress finds the base address of a loaded DLL in the target process
+func (i *Injector) findLoadedDLLBaseAddress(hProcess windows.Handle, dllPath string) (uintptr, error) {
+	// Get the DLL filename from the full path
+	dllName := filepath.Base(dllPath)
+
+	// Enumerate modules in the target process
+	var moduleHandle windows.Handle
+	var cbNeeded uint32
+	var modules [1024]windows.Handle
+
+	psapi := windows.NewLazySystemDLL("psapi.dll")
+	enumProcessModules := psapi.NewProc("EnumProcessModules")
+	getModuleBaseNameW := psapi.NewProc("GetModuleBaseNameW")
+	getModuleInformation := psapi.NewProc("GetModuleInformation")
+
+	ret, _, _ := enumProcessModules.Call(
+		uintptr(hProcess),
+		uintptr(unsafe.Pointer(&modules[0])),
+		uintptr(len(modules)*int(unsafe.Sizeof(moduleHandle))),
+		uintptr(unsafe.Pointer(&cbNeeded)))
+
+	if ret == 0 {
+		return 0, fmt.Errorf("failed to enumerate process modules")
+	}
+
+	moduleCount := cbNeeded / uint32(unsafe.Sizeof(moduleHandle))
+
+	for i := uint32(0); i < moduleCount; i++ {
+		var moduleInfo struct {
+			BaseOfDll   uintptr
+			SizeOfImage uint32
+			EntryPoint  uintptr
+		}
+
+		// Get module information
+		ret, _, _ := getModuleInformation.Call(
+			uintptr(hProcess),
+			uintptr(modules[i]),
+			uintptr(unsafe.Pointer(&moduleInfo)),
+			unsafe.Sizeof(moduleInfo))
+
+		if ret == 0 {
+			continue
+		}
+
+		// Get module name
+		var moduleName [260]uint16
+		ret, _, _ = getModuleBaseNameW.Call(
+			uintptr(hProcess),
+			uintptr(modules[i]),
+			uintptr(unsafe.Pointer(&moduleName[0])),
+			uintptr(len(moduleName)))
+
+		if ret == 0 {
+			continue
+		}
+
+		// Convert to string and compare
+		moduleNameStr := windows.UTF16ToString(moduleName[:])
+		if strings.EqualFold(moduleNameStr, dllName) {
+			return moduleInfo.BaseOfDll, nil
+		}
+	}
+
+	return 0, fmt.Errorf("DLL not found in process modules: %s", dllName)
 }
 
 // manualMapDLL implements manual DLL mapping
@@ -458,6 +598,44 @@ func (i *Injector) standardInject() error {
 		return fmt.Errorf("unexpected wait result: %d", waitResult)
 	}
 
+	// Apply post-injection anti-detection techniques if requested
+	if i.bypassOptions.ErasePEHeader || i.bypassOptions.EraseEntryPoint {
+		i.logger.Info("Applying post-injection anti-detection techniques")
+		i.logger.Warn("WARNING: PE/Entry point erasure with LoadLibrary-based injection may cause instability")
+
+		// Wait for DLL to fully initialize before applying erasure
+		time.Sleep(2 * time.Second)
+
+		// Get the DLL base address from the thread exit code
+		var exitCode uint32
+		ret, _, _ := procGetExitCodeThread.Call(uintptr(threadHandle), uintptr(unsafe.Pointer(&exitCode)))
+		if ret != 0 && exitCode != 0 {
+			dllBaseAddress := uintptr(exitCode)
+
+			// Erase PE header if requested (with extra caution)
+			if i.bypassOptions.ErasePEHeader {
+				i.logger.Warn("Applying PE header erasure - this may affect DLL functionality")
+				if err := ErasePEHeaderSafely(hProcess, dllBaseAddress); err != nil {
+					i.logger.Warn("Failed to erase PE header", "error", err)
+				} else {
+					i.logger.Info("PE header erased successfully (with safety measures)")
+				}
+			}
+
+			// Erase entry point if requested (with extra caution)
+			if i.bypassOptions.EraseEntryPoint {
+				i.logger.Warn("Applying entry point erasure - this may affect DLL unloading")
+				if err := EraseEntryPointSafely(hProcess, dllBaseAddress); err != nil {
+					i.logger.Warn("Failed to erase entry point", "error", err)
+				} else {
+					i.logger.Info("Entry point erased successfully (with safety measures)")
+				}
+			}
+		} else {
+			i.logger.Warn("Could not get DLL base address for post-injection techniques")
+		}
+	}
+
 	i.logger.Info("Standard injection completed successfully")
 	return nil
 }
@@ -595,6 +773,42 @@ func (i *Injector) setWindowsHookExInject() error {
 		}
 		i.logger.Info("Cleaned up hooks", "count", len(successfulHooks))
 	}()
+
+	// Apply post-injection anti-detection techniques if requested
+	if i.bypassOptions.ErasePEHeader || i.bypassOptions.EraseEntryPoint {
+		i.logger.Info("Applying post-injection anti-detection techniques for SetWindowsHookEx")
+
+		// Open target process to apply anti-detection techniques
+		hProcess, err := windows.OpenProcess(
+			windows.PROCESS_VM_OPERATION|windows.PROCESS_VM_WRITE|windows.PROCESS_VM_READ,
+			false, i.processID)
+		if err == nil {
+			defer windows.CloseHandle(hProcess)
+
+			// Use the module handle as the base address
+			dllBaseAddress := uintptr(moduleHandle)
+
+			// Erase PE header if requested
+			if i.bypassOptions.ErasePEHeader {
+				if err := ErasePEHeader(hProcess, dllBaseAddress); err != nil {
+					i.logger.Warn("Failed to erase PE header", "error", err)
+				} else {
+					i.logger.Info("PE header erased successfully")
+				}
+			}
+
+			// Erase entry point if requested
+			if i.bypassOptions.EraseEntryPoint {
+				if err := EraseEntryPoint(hProcess, dllBaseAddress); err != nil {
+					i.logger.Warn("Failed to erase entry point", "error", err)
+				} else {
+					i.logger.Info("Entry point erased successfully")
+				}
+			}
+		} else {
+			i.logger.Warn("Could not open process for post-injection techniques", "error", err)
+		}
+	}
 
 	i.logger.Info("SetWindowsHookEx injection completed",
 		"successful_hooks", len(successfulHooks),
@@ -748,6 +962,39 @@ func (i *Injector) queueUserAPCInject() error {
 		i.logger.Warn("Failed to trigger APC execution", "error", err)
 	}
 
+	// Apply post-injection anti-detection techniques if requested
+	if i.bypassOptions.ErasePEHeader || i.bypassOptions.EraseEntryPoint {
+		i.logger.Info("Applying post-injection anti-detection techniques for QueueUserAPC")
+
+		// Wait a moment for DLL to load before applying techniques
+		time.Sleep(1 * time.Second)
+
+		// Try to find the loaded DLL base address
+		// For APC injection, we need to enumerate loaded modules to find our DLL
+		dllBaseAddress, err := i.findLoadedDLLBaseAddress(hProcess, absPath)
+		if err != nil {
+			i.logger.Warn("Could not find loaded DLL base address", "error", err)
+		} else {
+			// Erase PE header if requested
+			if i.bypassOptions.ErasePEHeader {
+				if err := ErasePEHeader(hProcess, dllBaseAddress); err != nil {
+					i.logger.Warn("Failed to erase PE header", "error", err)
+				} else {
+					i.logger.Info("PE header erased successfully")
+				}
+			}
+
+			// Erase entry point if requested
+			if i.bypassOptions.EraseEntryPoint {
+				if err := EraseEntryPoint(hProcess, dllBaseAddress); err != nil {
+					i.logger.Warn("Failed to erase entry point", "error", err)
+				} else {
+					i.logger.Info("Entry point erased successfully")
+				}
+			}
+		}
+	}
+
 	i.logger.Info("QueueUserAPC injection completed",
 		"successful_apc_count", successCount,
 		"total_threads", len(alertableThreads))
@@ -850,6 +1097,38 @@ func (i *Injector) earlyBirdAPCInject() error {
 
 	// Add a short delay before resuming threads to ensure APC is properly queued
 	time.Sleep(100 * time.Millisecond)
+
+	// Apply post-injection anti-detection techniques if requested
+	if i.bypassOptions.ErasePEHeader || i.bypassOptions.EraseEntryPoint {
+		i.logger.Info("Applying post-injection anti-detection techniques for EarlyBird APC")
+
+		// Wait a moment for DLL to load before applying techniques
+		time.Sleep(1 * time.Second)
+
+		// Try to find the loaded DLL base address
+		dllBaseAddress, err := i.findLoadedDLLBaseAddress(hProcess, absPath)
+		if err != nil {
+			i.logger.Warn("Could not find loaded DLL base address", "error", err)
+		} else {
+			// Erase PE header if requested
+			if i.bypassOptions.ErasePEHeader {
+				if err := ErasePEHeader(hProcess, dllBaseAddress); err != nil {
+					i.logger.Warn("Failed to erase PE header", "error", err)
+				} else {
+					i.logger.Info("PE header erased successfully")
+				}
+			}
+
+			// Erase entry point if requested
+			if i.bypassOptions.EraseEntryPoint {
+				if err := EraseEntryPoint(hProcess, dllBaseAddress); err != nil {
+					i.logger.Warn("Failed to erase entry point", "error", err)
+				} else {
+					i.logger.Info("Entry point erased successfully")
+				}
+			}
+		}
+	}
 
 	i.logger.Info("EarlyBird APC injection completed",
 		"successful_apc_count", successCount,
@@ -1208,9 +1487,42 @@ func (i *Injector) suspendAllThreads() ([]windows.Handle, error) {
 
 // configureJobObjectForSuspension configures job object to suspend processes
 func (i *Injector) configureJobObjectForSuspension(jobHandle windows.Handle) error {
-	// This would configure the job object with suspension limits
-	// For now, we implement a basic version
 	i.logger.Info("Configuring job object for process suspension")
+
+	// Define job object basic limit information
+	type JobObjectBasicLimitInformation struct {
+		PerProcessUserTimeLimit uint64
+		PerJobUserTimeLimit     uint64
+		LimitFlags              uint32
+		MinimumWorkingSetSize   uintptr
+		MaximumWorkingSetSize   uintptr
+		ActiveProcessLimit      uint32
+		Affinity                uintptr
+		PriorityClass           uint32
+		SchedulingClass         uint32
+	}
+
+	// Set up basic limits
+	var basicLimits JobObjectBasicLimitInformation
+	basicLimits.LimitFlags = 0x00000020 // JOB_OBJECT_LIMIT_SUSPEND_RESUME
+	basicLimits.ActiveProcessLimit = 1
+
+	// Set job object information
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	setInformationJobObject := kernel32.NewProc("SetInformationJobObject")
+
+	ret, _, _ := setInformationJobObject.Call(
+		uintptr(jobHandle),
+		2, // JobObjectBasicLimitInformation
+		uintptr(unsafe.Pointer(&basicLimits)),
+		unsafe.Sizeof(basicLimits),
+	)
+
+	if ret == 0 {
+		return fmt.Errorf("failed to configure job object limits")
+	}
+
+	i.logger.Info("Job object configured successfully for process suspension")
 	return nil
 }
 
@@ -1231,16 +1543,54 @@ func (i *Injector) resolveLoadLibraryAddress() (uintptr, error) {
 func (i *Injector) resolveLoadLibraryViaSyscalls() (uintptr, error) {
 	i.logger.Info("Resolving LoadLibrary via direct syscalls")
 
-	// This is a simplified implementation
-	// In production, this would involve parsing PEB, walking loaded modules,
-	// and manually resolving the export table
+	// Use LdrGetProcedureAddress to resolve LoadLibraryA from kernel32
+	// This is less likely to be hooked than GetProcAddress
+	ntdll := windows.NewLazySystemDLL("ntdll.dll")
+	ldrGetProcedureAddress := ntdll.NewProc("LdrGetProcedureAddress")
 
-	// For now, fallback to standard method but log the attempt
-	i.logger.Warn("Direct syscall resolution not fully implemented, using standard method")
+	// Get kernel32 module handle
+	kernel32Handle, err := windows.LoadLibrary("kernel32.dll")
+	if err != nil {
+		i.logger.Warn("Failed to get kernel32 handle, using standard method")
+		kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+		loadLibraryA := kernel32.NewProc("LoadLibraryA")
+		return loadLibraryA.Addr(), nil
+	}
 
-	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
-	loadLibraryA := kernel32.NewProc("LoadLibraryA")
-	return loadLibraryA.Addr(), nil
+	// Create ANSI_STRING for "LoadLibraryA"
+	functionName := "LoadLibraryA"
+	var ansiString struct {
+		Length        uint16
+		MaximumLength uint16
+		Buffer        *byte
+	}
+
+	functionNameBytes := []byte(functionName)
+	ansiString.Length = uint16(len(functionNameBytes))
+	ansiString.MaximumLength = uint16(len(functionNameBytes))
+	ansiString.Buffer = &functionNameBytes[0]
+
+	var functionAddr uintptr
+
+	// Call LdrGetProcedureAddress
+	ret, _, _ := ldrGetProcedureAddress.Call(
+		uintptr(kernel32Handle),
+		uintptr(unsafe.Pointer(&ansiString)),
+		0, // Ordinal (0 means use name)
+		uintptr(unsafe.Pointer(&functionAddr)),
+	)
+
+	if ret != 0 || functionAddr == 0 {
+		i.logger.Warn("LdrGetProcedureAddress failed, using standard method")
+		kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+		loadLibraryA := kernel32.NewProc("LoadLibraryA")
+		return loadLibraryA.Addr(), nil
+	}
+
+	i.logger.Info("Successfully resolved LoadLibraryA via LdrGetProcedureAddress",
+		"address", fmt.Sprintf("0x%X", functionAddr))
+
+	return functionAddr, nil
 }
 
 // Windows API function declarations

