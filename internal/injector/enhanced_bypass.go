@@ -96,7 +96,6 @@ var (
 	procThread32First            = kernel32.NewProc("Thread32First")
 	procThread32Next             = kernel32.NewProc("Thread32Next")
 	procOpenThread               = kernel32.NewProc("OpenThread")
-	procSuspendThread            = kernel32.NewProc("SuspendThread")
 	procResumeThread             = kernel32.NewProc("ResumeThread")
 	procGetThreadContext         = kernel32.NewProc("GetThreadContext")
 	procSetThreadContext         = kernel32.NewProc("SetThreadContext")

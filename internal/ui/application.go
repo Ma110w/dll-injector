@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"image/color"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/AllenDang/giu"
@@ -86,8 +88,18 @@ type Application struct {
 	selectedTab        int32  // 0=Basic, 1=Advanced, 2=Preset
 	processSearchText  string // Search text for process dialog
 
+	// UI update channels for thread-safe UI updates
+	injectionResultChan chan InjectionResult
+
 	// Mutex for thread safety
 	mu sync.RWMutex
+}
+
+// InjectionResult represents the result of an injection operation
+type InjectionResult struct {
+	Success bool
+	Error   error
+	Message string
 }
 
 // LoggerAdapter adapts zap.Logger to injector.Logger interface
@@ -147,6 +159,7 @@ func NewApplication(title string, width, height int) *Application {
 			"DLL Notification",
 			"Job Object",
 		},
+		injectionResultChan: make(chan InjectionResult, 10), // 增加缓冲大小
 	}
 
 	// Initialize logger
@@ -332,6 +345,14 @@ func (app *Application) Log() *zap.Logger {
 
 // loop is the main UI loop
 func (app *Application) loop() {
+	// Check for injection results from background goroutine
+	select {
+	case result := <-app.injectionResultChan:
+		app.handleInjectionResult(result)
+	default:
+		// Continue with normal UI rendering
+	}
+
 	// Main window with exact layout matching the screenshot
 	giu.SingleWindow().Layout(
 		giu.Style().SetStyle(giu.StyleVarWindowPadding, 15, 15).To(
@@ -363,6 +384,33 @@ func (app *Application) loop() {
 
 	// Render dialogs
 	app.buildProcessSelectionDialog()
+	app.buildDialogs()
+}
+
+// handleInjectionResult handles injection results from background goroutine
+func (app *Application) handleInjectionResult(result InjectionResult) {
+	app.logger.Info("=== Handling injection result ===", zap.Bool("success", result.Success))
+
+	// Always hide progress dialog first
+	app.showProgressDialog = false
+
+	if result.Success {
+		app.addLogLine("✅ Injection successful!")
+		app.logger.Info("Setting success dialog to true")
+
+		app.successText = result.Message
+		app.showSuccessDialog = true
+
+		app.logger.Info("Success dialog should now be visible", zap.Bool("showSuccessDialog", app.showSuccessDialog))
+	} else {
+		if result.Error != nil {
+			app.addLogLine(fmt.Sprintf("❌ Injection failed: %v", result.Error))
+			app.logger.Error("Injection failed", zap.Error(result.Error))
+		} else {
+			app.addLogLine("❌ Injection failed: Unknown error")
+			app.logger.Error("Injection failed with unknown error")
+		}
+	}
 }
 
 // buildTopRow builds the top row with DLL File and Target Process
@@ -597,7 +645,7 @@ func (app *Application) buildInjectButton() giu.Widget {
 			giu.Style().SetColor(giu.StyleColorButtonActive, color.RGBA{R: 0, G: 100, B: 180, A: 255}).To(
 				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 255, G: 255, B: 255, A: 255}).To(
 					giu.Button("Inject").Size(-1, 45).OnClick(func() {
-						app.onInjectClickedSimple()
+						app.onInjectClicked()
 					}),
 				),
 			),
@@ -649,23 +697,6 @@ func (app *Application) clearAllOptions() {
 	app.allocBehindThreadStack = false
 	app.directSyscalls = false
 	app.processHollowing = false
-}
-
-// onInjectClicked handles the inject button click
-func (app *Application) onInjectClickedSimple() {
-	if app.selectedDllPath == "" {
-		app.addLogLine("Error: No DLL file selected")
-		return
-	}
-
-	if app.selectedPID <= 0 {
-		app.addLogLine("Error: No target process selected")
-		return
-	}
-
-	methodName := app.methodNames[app.injectionMethod]
-	app.addLogLine(fmt.Sprintf("Starting injection: %s -> PID %d using %s",
-		filepath.Base(app.selectedDllPath), app.selectedPID, methodName))
 }
 
 // buildProcessSelectionDialog builds the process selection dialog
@@ -1304,12 +1335,21 @@ func (app *Application) buildDialogs() {
 // onInjectClicked handles the inject button click
 func (app *Application) onInjectClicked() {
 	if app.selectedDllPath == "" {
+		app.addLogLine("❌ Error: No DLL file selected")
 		app.logger.Error("No DLL file selected")
 		return
 	}
 
 	if app.selectedPID <= 0 {
+		app.addLogLine("❌ Error: No target process selected")
 		app.logger.Error("No target process selected")
+		return
+	}
+
+	// Validate DLL file exists
+	if _, err := os.Stat(app.selectedDllPath); os.IsNotExist(err) {
+		app.addLogLine(fmt.Sprintf("❌ Error: DLL file does not exist: %s", app.selectedDllPath))
+		app.logger.Error("DLL file does not exist", zap.String("path", app.selectedDllPath))
 		return
 	}
 
@@ -1321,33 +1361,71 @@ func (app *Application) onInjectClicked() {
 		app.methodNames[app.injectionMethod],
 	)
 	app.showConfirmDialog = true
+	app.performInjection()
 }
 
 // performInjection performs the actual DLL injection
 func (app *Application) performInjection() {
+	app.logger.Info("=== Starting performInjection ===")
+
+	// 详细记录当前状态
+	app.logger.Info("GUI Injection Parameters:",
+		zap.String("dll_path", app.selectedDllPath),
+		zap.Int32("process_id", app.selectedPID),
+		zap.String("process_name", app.selectedProcessName),
+		zap.Int32("injection_method", app.injectionMethod),
+	)
+
 	app.progressText = "Preparing injection..."
 	app.showProgressDialog = true
+	app.logger.Info("Progress dialog should be shown")
 
 	go func() {
-		defer func() {
-			app.showProgressDialog = false
-		}()
+		app.logger.Info("=== Injection goroutine started ===")
 
-		app.logger.Info("Starting DLL injection",
-			zap.String("DLL", app.selectedDllPath),
-			zap.String("Process", app.selectedProcessName),
-			zap.Int32("PID", app.selectedPID),
-			zap.String("Method", app.methodNames[app.injectionMethod]),
-		)
+		// 验证参数
+		if app.selectedDllPath == "" {
+			app.logger.Error("DLL path is empty in GUI")
+			result := InjectionResult{
+				Success: false,
+				Error:   fmt.Errorf("DLL path is empty"),
+				Message: "",
+			}
+			app.injectionResultChan <- result
+			return
+		}
 
-		// Create injector instance
+		if app.selectedPID <= 0 {
+			app.logger.Error("Invalid process ID in GUI", zap.Int32("pid", app.selectedPID))
+			result := InjectionResult{
+				Success: false,
+				Error:   fmt.Errorf("invalid process ID: %d", app.selectedPID),
+				Message: "",
+			}
+			app.injectionResultChan <- result
+			return
+		}
+
+		app.logger.Info("Creating injector instance")
 		loggerAdapter := &LoggerAdapter{logger: app.logger}
 		inj := injector.NewInjector(app.selectedDllPath, uint32(app.selectedPID), loggerAdapter)
 
+		if inj == nil {
+			app.logger.Error("Failed to create injector instance")
+			result := InjectionResult{
+				Success: false,
+				Error:   fmt.Errorf("failed to create injector instance"),
+				Message: "",
+			}
+			app.injectionResultChan <- result
+			return
+		}
+
 		// Set injection method
+		app.logger.Info("Setting injection method", zap.Int32("method", app.injectionMethod))
 		inj.SetMethod(injector.InjectionMethod(app.injectionMethod))
 
-		// Set anti-detection options
+		// Set basic anti-detection options (simplified to avoid conflicts)
 		options := injector.BypassOptions{
 			MemoryLoad:            app.memoryLoad,
 			ErasePEHeader:         app.peHeaderErasure,
@@ -1362,45 +1440,64 @@ func (app *Application) performInjection() {
 			ThreadStackAllocation: app.allocBehindThreadStack,
 			DirectSyscalls:        app.directSyscalls,
 		}
+
+		app.logger.Info("Setting bypass options",
+			zap.Bool("memory_load", options.MemoryLoad),
+			zap.Bool("manual_mapping", options.ManualMapping),
+		)
 		inj.SetBypassOptions(options)
 
-		// Set enhanced options
-		enhancedOptions := injector.EnhancedBypassOptions{
-			BypassOptions:        options,
-			RandomizeAllocation:  app.randomizeAllocation,
-			DelayedExecution:     app.delayedExecution,
-			MultiStageInjection:  app.multiStageInjection,
-			AntiDebugTechniques:  app.antiDebugTechniques,
-			ProcessHollowing:     app.processHollowing,
-			AtomBombing:          app.atomBombing,
-			DoppelgangingProcess: app.doppelgangingProcess,
-			GhostWriting:         app.ghostWriting,
-			ModuleStomping:       app.moduleStomping,
-			ThreadHijacking:      app.threadHijacking,
-			APCQueueing:          app.apcQueueing,
-			MemoryFluctuation:    app.memoryFluctuation,
-			AntiVMTechniques:     app.antiVMTechniques,
-			ProcessMirroring:     app.processMirroring,
-			StealthyThreads:      app.stealthyThreads,
-		}
-		inj.SetEnhancedBypassOptions(enhancedOptions)
-
 		// Perform injection
+		app.logger.Info("=== CALLING ACTUAL INJECTION ===")
+		app.addLogLine("🔄 Starting injection process...")
+
+		// 确保这里实际调用了注入
 		err := inj.Inject()
 
-		if err != nil {
-			app.logger.Error("Injection failed", zap.Error(err))
-		} else {
-			app.logger.Info("Injection successful")
-			app.successText = fmt.Sprintf(
+		app.logger.Info("=== INJECTION CALL COMPLETED ===",
+			zap.Bool("success", err == nil),
+			zap.Error(err),
+		)
+
+		// Prepare result message
+		var resultMsg string
+		if err == nil {
+			resultMsg = fmt.Sprintf(
 				"DLL: %s\nProcess: %s (PID: %d)\nMethod: %s",
 				filepath.Base(app.selectedDllPath),
 				app.selectedProcessName,
 				app.selectedPID,
 				app.methodNames[app.injectionMethod],
 			)
-			app.showSuccessDialog = true
 		}
+
+		// Send result to main thread via channel
+		result := InjectionResult{
+			Success: err == nil,
+			Error:   err,
+			Message: resultMsg,
+		}
+
+		app.logger.Info("Sending injection result to main thread",
+			zap.Bool("success", result.Success),
+			zap.String("error_msg", func() string {
+				if result.Error != nil {
+					return result.Error.Error()
+				}
+				return "none"
+			}()),
+		)
+
+		// 使用超时机制确保结果能被发送
+		select {
+		case app.injectionResultChan <- result:
+			app.logger.Info("Injection result sent successfully")
+		case <-time.After(5 * time.Second):
+			app.logger.Error("Failed to send injection result - timeout")
+			app.addLogLine("❌ Error: Failed to communicate injection result")
+		}
+
+		app.logger.Info("=== Injection goroutine finished ===")
 	}()
 }
 

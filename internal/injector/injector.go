@@ -75,11 +75,41 @@ func (i *Injector) Inject() error {
 		return fmt.Errorf("logger not initialized")
 	}
 
+	// Validate inputs
+	if i.dllPath == "" {
+		i.logger.Error("DLL path is empty")
+		return fmt.Errorf("DLL path cannot be empty")
+	}
+
+	if i.processID == 0 {
+		i.logger.Error("Process ID is invalid")
+		return fmt.Errorf("process ID cannot be 0")
+	}
+
+	// Check if DLL file exists and get detailed info
+	fileInfo, err := os.Stat(i.dllPath)
+	if os.IsNotExist(err) {
+		i.logger.Error("DLL file does not exist", "path", i.dllPath)
+		return fmt.Errorf("DLL file does not exist: %s", i.dllPath)
+	}
+	i.logger.Info("DLL file found", "path", i.dllPath, "size", fileInfo.Size())
+
+	// Check process architecture and permissions
+	err = i.validateTargetProcess()
+	if err != nil {
+		return fmt.Errorf("target process validation failed: %v", err)
+	}
+
+	// Validate DLL architecture
+	err = i.validateDLLArchitecture()
+	if err != nil {
+		return fmt.Errorf("DLL validation failed: %v", err)
+	}
+
 	i.logger.Info("Starting injection", "method", methodToString(i.method), "dll", i.dllPath, "pid", i.processID)
 
 	// Read DLL bytes if needed for memory operations
 	var dllBytes []byte
-	var err error
 
 	if i.bypassOptions.MemoryLoad || i.bypassOptions.ManualMapping {
 		dllBytes, err = ioutil.ReadFile(i.dllPath)
@@ -272,9 +302,9 @@ func (i *Injector) legitProcessInject(dllBytes []byte) error {
 
 // standardInject implements standard CreateRemoteThread injection
 func (i *Injector) standardInject() error {
-	i.logger.Info("Using standard injection method")
+	i.logger.Info("Using standard injection method", "dll", i.dllPath, "pid", i.processID)
 
-	// Open target process
+	// Open target process with all required permissions
 	hProcess, err := windows.OpenProcess(
 		windows.PROCESS_CREATE_THREAD|
 			windows.PROCESS_VM_OPERATION|
@@ -283,56 +313,122 @@ func (i *Injector) standardInject() error {
 			windows.PROCESS_QUERY_INFORMATION,
 		false, i.processID)
 	if err != nil {
-		i.logger.Error("Failed to open target process", "error", err)
+		i.logger.Error("Failed to open target process", "error", err, "pid", i.processID)
+		// Provide helpful error message based on common issues
+		if err.Error() == "Access is denied." {
+			return fmt.Errorf("access denied - try running as administrator or check if target process is protected")
+		}
 		return fmt.Errorf("failed to open target process: %v", err)
 	}
 	defer windows.CloseHandle(hProcess)
+	i.logger.Info("Successfully opened target process", "handle", hProcess)
+
+	// Verify process is still running
+	var exitCode uint32
+	err = windows.GetExitCodeProcess(hProcess, &exitCode)
+	if err == nil && exitCode != 259 { // STILL_ACTIVE = 259
+		i.logger.Error("Target process is not running", "exit_code", exitCode)
+		return fmt.Errorf("target process has exited with code %d", exitCode)
+	}
+
+	// Convert DLL path to absolute path to avoid path resolution issues
+	absPath, err := filepath.Abs(i.dllPath)
+	if err != nil {
+		i.logger.Warn("Failed to get absolute path", "error", err)
+		absPath = i.dllPath
+	}
+	i.logger.Info("Using DLL path", "absolute_path", absPath)
 
 	// Allocate memory for DLL path
-	dllPathBytes := []byte(i.dllPath + "\x00")
+	dllPathBytes := []byte(absPath + "\x00")
 	pathSize := len(dllPathBytes)
+	i.logger.Info("Allocating memory for DLL path", "path", absPath, "size", pathSize)
 
 	memAddr, err := VirtualAllocEx(hProcess, 0, uintptr(pathSize),
 		windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_READWRITE)
 	if err != nil {
-		i.logger.Error("Failed to allocate memory", "error", err)
+		i.logger.Error("Failed to allocate memory", "error", err, "size", pathSize)
 		return fmt.Errorf("failed to allocate memory: %v", err)
 	}
+	i.logger.Info("Successfully allocated memory", "address", fmt.Sprintf("0x%X", memAddr))
 
 	// Write DLL path to target process
 	var bytesWritten uintptr
 	err = WriteProcessMemory(hProcess, memAddr, unsafe.Pointer(&dllPathBytes[0]),
 		uintptr(pathSize), &bytesWritten)
 	if err != nil {
-		i.logger.Error("Failed to write DLL path", "error", err)
+		i.logger.Error("Failed to write DLL path", "error", err, "address", fmt.Sprintf("0x%X", memAddr))
 		return fmt.Errorf("failed to write DLL path: %v", err)
+	}
+	i.logger.Info("Successfully wrote DLL path", "bytes_written", bytesWritten, "expected", pathSize)
+
+	// Verify the write was successful
+	if bytesWritten != uintptr(pathSize) {
+		i.logger.Error("Incomplete write", "written", bytesWritten, "expected", pathSize)
+		return fmt.Errorf("incomplete write: wrote %d bytes, expected %d", bytesWritten, pathSize)
 	}
 
 	// Get LoadLibraryA address
 	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
 	loadLibraryA := kernel32.NewProc("LoadLibraryA")
 	loadLibraryAddr := loadLibraryA.Addr()
+	i.logger.Info("LoadLibraryA address", "address", fmt.Sprintf("0x%X", loadLibraryAddr))
+
+	// Verify the DLL path exists
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		i.logger.Error("DLL file does not exist", "path", absPath)
+		return fmt.Errorf("DLL file does not exist: %s", absPath)
+	}
 
 	// Create remote thread
 	var threadID uint32
+	i.logger.Info("Creating remote thread", "entry_point", fmt.Sprintf("0x%X", loadLibraryAddr), "parameter", fmt.Sprintf("0x%X", memAddr))
+
 	threadHandle, err := CreateRemoteThread(hProcess, nil, 0,
 		loadLibraryAddr, memAddr, 0, &threadID)
 	if err != nil {
-		i.logger.Error("Failed to create remote thread", "error", err)
+		i.logger.Error("Failed to create remote thread", "error", err, "loadlibrary_addr", fmt.Sprintf("0x%X", loadLibraryAddr), "param_addr", fmt.Sprintf("0x%X", memAddr))
 		return fmt.Errorf("failed to create remote thread: %v", err)
 	}
 	defer windows.CloseHandle(threadHandle)
 
-	i.logger.Info("Standard injection successful", "thread_id", threadID)
+	i.logger.Info("Successfully created remote thread", "thread_id", threadID, "handle", threadHandle)
 
-	// Wait for thread completion
-	waitResult, err := windows.WaitForSingleObject(threadHandle, 5000)
+	// Wait for thread completion with detailed logging
+	i.logger.Info("Waiting for thread completion...")
+	waitResult, err := windows.WaitForSingleObject(threadHandle, 10000) // Increased timeout to 10 seconds
 	if err != nil {
-		i.logger.Warn("Failed to wait for thread", "error", err)
-	} else if waitResult == uint32(windows.WAIT_TIMEOUT) {
-		i.logger.Warn("Thread execution timed out")
+		i.logger.Error("Failed to wait for thread", "error", err)
+		return fmt.Errorf("failed to wait for thread: %v", err)
 	}
 
+	switch waitResult {
+	case uint32(windows.WAIT_TIMEOUT):
+		i.logger.Error("Thread execution timed out")
+		return fmt.Errorf("thread execution timed out after 10 seconds")
+	case uint32(windows.WAIT_OBJECT_0):
+		i.logger.Info("Thread completed successfully")
+
+		// Get thread exit code (LoadLibrary return value)
+		var exitCode uint32
+		ret, _, _ := procGetExitCodeThread.Call(uintptr(threadHandle), uintptr(unsafe.Pointer(&exitCode)))
+		if ret != 0 {
+			i.logger.Info("Thread exit code", "code", exitCode, "hex", fmt.Sprintf("0x%X", exitCode))
+			if exitCode == 0 {
+				i.logger.Error("LoadLibrary failed - exit code 0")
+				return fmt.Errorf("LoadLibrary failed - DLL could not be loaded. Check DLL dependencies and architecture")
+			} else {
+				i.logger.Info("LoadLibrary succeeded", "dll_base", fmt.Sprintf("0x%X", exitCode))
+			}
+		} else {
+			i.logger.Warn("Failed to get thread exit code")
+		}
+	default:
+		i.logger.Error("Unexpected wait result", "result", waitResult)
+		return fmt.Errorf("unexpected wait result: %d", waitResult)
+	}
+
+	i.logger.Info("Standard injection completed successfully")
 	return nil
 }
 
@@ -552,6 +648,8 @@ var (
 	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
 	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
 	procTerminateJobObject       = kernel32.NewProc("TerminateJobObject")
+	procGetExitCodeThread        = kernel32.NewProc("GetExitCodeThread")
+	procSuspendThread            = kernel32.NewProc("SuspendThread") // 修复：添加缺失的声明
 )
 
 // VirtualAllocEx allocates memory in another process
@@ -738,4 +836,117 @@ func CreateSuspendedProcess(processID uint32) (*ProcessInformation, error) {
 		ProcessId: processID,
 		ThreadId:  te.ThreadID,
 	}, nil
+}
+
+// validateTargetProcess checks if target process is accessible and gets its architecture
+func (i *Injector) validateTargetProcess() error {
+	i.logger.Info("Validating target process", "pid", i.processID)
+
+	// Try to open process with required permissions
+	hProcess, err := windows.OpenProcess(
+		windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ,
+		false, i.processID)
+	if err != nil {
+		i.logger.Error("Cannot open target process for validation", "error", err, "pid", i.processID)
+		return fmt.Errorf("cannot open target process (PID %d): %v. Try running as administrator", i.processID, err)
+	}
+	defer windows.CloseHandle(hProcess)
+
+	// Check if process is still running
+	var exitCode uint32
+	err = windows.GetExitCodeProcess(hProcess, &exitCode)
+	if err != nil {
+		i.logger.Error("Failed to get process exit code", "error", err)
+		return fmt.Errorf("failed to query process status: %v", err)
+	}
+
+	if exitCode != 259 { // STILL_ACTIVE = 259
+		i.logger.Error("Target process is not running", "exit_code", exitCode)
+		return fmt.Errorf("target process (PID %d) is not running", i.processID)
+	}
+
+	// Check process architecture
+	var isWow64 bool
+	err = windows.IsWow64Process(hProcess, &isWow64)
+	if err != nil {
+		i.logger.Warn("Failed to check process architecture", "error", err)
+	} else {
+		if isWow64 {
+			i.logger.Info("Target process is 32-bit (WoW64)")
+		} else {
+			i.logger.Info("Target process is 64-bit")
+		}
+	}
+
+	i.logger.Info("Target process validation successful")
+	return nil
+}
+
+// validateDLLArchitecture checks if DLL architecture matches target process
+func (i *Injector) validateDLLArchitecture() error {
+	i.logger.Info("Validating DLL architecture", "dll", i.dllPath)
+
+	// Read DLL file
+	dllBytes, err := os.ReadFile(i.dllPath)
+	if err != nil {
+		return fmt.Errorf("failed to read DLL file: %v", err)
+	}
+
+	if len(dllBytes) < 64 {
+		return fmt.Errorf("DLL file too small to be valid")
+	}
+
+	// Check DOS header
+	if dllBytes[0] != 'M' || dllBytes[1] != 'Z' {
+		return fmt.Errorf("invalid DLL file: missing MZ signature")
+	}
+
+	// Get PE header offset
+	peOffset := *(*uint32)(unsafe.Pointer(&dllBytes[60]))
+	if peOffset >= uint32(len(dllBytes)) || peOffset < 64 {
+		return fmt.Errorf("invalid PE header offset")
+	}
+
+	// Check PE signature
+	if peOffset+4 >= uint32(len(dllBytes)) {
+		return fmt.Errorf("PE header beyond file end")
+	}
+
+	if dllBytes[peOffset] != 'P' || dllBytes[peOffset+1] != 'E' {
+		return fmt.Errorf("invalid DLL file: missing PE signature")
+	}
+
+	// Get machine type
+	if peOffset+24 >= uint32(len(dllBytes)) {
+		return fmt.Errorf("machine type beyond file end")
+	}
+
+	machine := *(*uint16)(unsafe.Pointer(&dllBytes[peOffset+4]))
+
+	var dllArch string
+	switch machine {
+	case 0x14c: // IMAGE_FILE_MACHINE_I386
+		dllArch = "32-bit"
+	case 0x8664: // IMAGE_FILE_MACHINE_AMD64
+		dllArch = "64-bit"
+	default:
+		dllArch = fmt.Sprintf("unknown (0x%x)", machine)
+	}
+
+	i.logger.Info("DLL architecture detected", "architecture", dllArch, "machine_type", fmt.Sprintf("0x%x", machine))
+
+	// Validate characteristics
+	if peOffset+22 >= uint32(len(dllBytes)) {
+		return fmt.Errorf("characteristics beyond file end")
+	}
+
+	characteristics := *(*uint16)(unsafe.Pointer(&dllBytes[peOffset+22]))
+	isDll := characteristics&0x2000 != 0 // IMAGE_FILE_DLL
+
+	if !isDll {
+		i.logger.Warn("File does not have DLL characteristic flag set")
+	}
+
+	i.logger.Info("DLL validation completed", "is_dll", isDll)
+	return nil
 }
