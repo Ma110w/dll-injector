@@ -157,7 +157,7 @@ func NewApplication(title string, width, height int) *Application {
 			"QueueUserAPC",
 			"Early Bird APC",
 			"DLL Notification",
-			"Job Object",
+			"CryoBird (Job Object)",
 		},
 		injectionResultChan: make(chan InjectionResult, 10), // 增加缓冲大小
 	}
@@ -493,9 +493,9 @@ func (app *Application) buildInjectionMethodSection() giu.Widget {
 				app.injectionMethod = 4
 				app.addLogLine("Injection method selected: DLL Notification")
 			}),
-			giu.RadioButton("Job Object", app.injectionMethod == 5).OnChange(func() {
+			giu.RadioButton("CryoBird", app.injectionMethod == 5).OnChange(func() {
 				app.injectionMethod = 5
-				app.addLogLine("Injection method selected: Job Object")
+				app.addLogLine("Injection method selected: CryoBird (Job Object)")
 			}),
 		),
 	)

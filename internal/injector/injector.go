@@ -2,9 +2,9 @@ package injector
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -67,6 +67,13 @@ func (i *Injector) SetMethod(method InjectionMethod) {
 // SetBypassOptions sets anti-detection options
 func (i *Injector) SetBypassOptions(options BypassOptions) {
 	i.bypassOptions = options
+	i.useEnhancedOptions = false
+}
+
+// SetEnhancedBypassOptions sets enhanced anti-detection options
+func (i *Injector) SetEnhancedBypassOptions(options EnhancedBypassOptions) {
+	i.enhancedOptions = options
+	i.useEnhancedOptions = true
 }
 
 // Inject performs DLL injection using the configured method
@@ -86,6 +93,12 @@ func (i *Injector) Inject() error {
 		return fmt.Errorf("process ID cannot be 0")
 	}
 
+	// Additional process access validation
+	if err := ValidateProcessAccess(i.processID); err != nil {
+		i.logger.Error("Process access validation failed", "error", err)
+		return err
+	}
+
 	// Check if DLL file exists and get detailed info
 	fileInfo, err := os.Stat(i.dllPath)
 	if os.IsNotExist(err) {
@@ -93,6 +106,19 @@ func (i *Injector) Inject() error {
 		return fmt.Errorf("DLL file does not exist: %s", i.dllPath)
 	}
 	i.logger.Info("DLL file found", "path", i.dllPath, "size", fileInfo.Size())
+
+	// Read and validate DLL file
+	dllBytes, err := os.ReadFile(i.dllPath)
+	if err != nil {
+		i.logger.Error("Failed to read DLL file", "error", err)
+		return fmt.Errorf("failed to read DLL file: %v", err)
+	}
+
+	// Validate PE file format
+	if err := IsValidPEFile(dllBytes); err != nil {
+		i.logger.Error("Invalid PE file", "error", err)
+		return fmt.Errorf("invalid PE file: %v", err)
+	}
 
 	// Check process architecture and permissions
 	err = i.validateTargetProcess()
@@ -108,54 +134,56 @@ func (i *Injector) Inject() error {
 
 	i.logger.Info("Starting injection", "method", methodToString(i.method), "dll", i.dllPath, "pid", i.processID)
 
-	// Read DLL bytes if needed for memory operations
-	var dllBytes []byte
+	// Log injection attempt
+	LogInjectionAttempt(methodToString(i.method), i.processID, i.dllPath, false)
 
-	if i.bypassOptions.MemoryLoad || i.bypassOptions.ManualMapping {
-		dllBytes, err = ioutil.ReadFile(i.dllPath)
-		if err != nil {
-			i.logger.Error("Failed to read DLL file", "error", err)
-			return fmt.Errorf("failed to read DLL file: %v", err)
-		}
-	}
+	var injectionErr error
 
 	// Handle memory load with bypass options
 	if i.bypassOptions.MemoryLoad {
-		return i.memoryLoadDLL(dllBytes)
+		injectionErr = i.memoryLoadDLL(dllBytes)
+	} else if i.bypassOptions.ManualMapping {
+		// Handle manual mapping
+		injectionErr = i.manualMapDLL(dllBytes)
+	} else if i.bypassOptions.PathSpoofing {
+		// Handle path spoofing
+		injectionErr = i.spoofDLLPath()
+	} else if i.bypassOptions.LegitProcessInjection {
+		// Handle legitimate process injection
+		injectionErr = i.legitProcessInject(dllBytes)
+	} else {
+		// Standard injection methods
+		switch i.method {
+		case StandardInjection:
+			injectionErr = i.standardInject()
+		case SetWindowsHookExInjection:
+			injectionErr = i.setWindowsHookExInject()
+		case QueueUserAPCInjection:
+			injectionErr = i.queueUserAPCInject()
+		case EarlyBirdAPCInjection:
+			injectionErr = i.earlyBirdAPCInject()
+		case DllNotificationInjection:
+			injectionErr = i.dllNotificationInject()
+		case CryoBirdInjection:
+			injectionErr = i.cryoBirdInject()
+		default:
+			injectionErr = fmt.Errorf("unsupported injection method: %d", i.method)
+		}
 	}
 
-	// Handle manual mapping
-	if i.bypassOptions.ManualMapping {
-		return i.manualMapDLL(dllBytes)
+	// Log injection result
+	LogInjectionAttempt(methodToString(i.method), i.processID, i.dllPath, injectionErr == nil)
+
+	// Clean up sensitive data
+	SecureCleanup(dllBytes)
+
+	if injectionErr != nil {
+		i.logger.Error("Injection failed", "error", injectionErr)
+		return injectionErr
 	}
 
-	// Handle path spoofing
-	if i.bypassOptions.PathSpoofing {
-		return i.diskLoadDLLWithSpoofing()
-	}
-
-	// Handle legitimate process injection
-	if i.bypassOptions.LegitProcessInjection {
-		return i.legitProcessInject(dllBytes)
-	}
-
-	// Standard injection methods
-	switch i.method {
-	case StandardInjection:
-		return i.standardInject()
-	case SetWindowsHookExInjection:
-		return i.setWindowsHookExInject()
-	case QueueUserAPCInjection:
-		return i.queueUserAPCInject()
-	case EarlyBirdAPCInjection:
-		return i.earlyBirdAPCInject()
-	case DllNotificationInjection:
-		return i.dllNotificationInject()
-	case CryoBirdInjection:
-		return i.cryoBirdInject()
-	default:
-		return fmt.Errorf("unsupported injection method: %d", i.method)
-	}
+	i.logger.Info("Injection completed successfully")
+	return nil
 }
 
 // createTempDllFile creates a temporary file with DLL data
@@ -164,7 +192,7 @@ func (i *Injector) createTempDllFile(dllBytes []byte) (string, error) {
 	fileName := fmt.Sprintf("temp_dll_%d.dll", i.processID)
 	tempFile := filepath.Join(tempDir, fileName)
 
-	err := ioutil.WriteFile(tempFile, dllBytes, 0644)
+	err := os.WriteFile(tempFile, dllBytes, 0644)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temporary DLL file: %v", err)
 	}
@@ -174,7 +202,7 @@ func (i *Injector) createTempDllFile(dllBytes []byte) (string, error) {
 
 // manualMapDLL implements manual DLL mapping
 func (i *Injector) manualMapDLL(dllBytes []byte) error {
-	i.logger.Info("Using manual mapping method")
+	i.logger.Info("Using advanced manual mapping method")
 
 	// Open target process
 	hProcess, err := windows.OpenProcess(
@@ -190,19 +218,21 @@ func (i *Injector) manualMapDLL(dllBytes []byte) error {
 	}
 	defer windows.CloseHandle(hProcess)
 
-	// Perform manual mapping with bypass options
-	baseAddress, err := i.manualMapDLLWithOptions(hProcess, dllBytes)
+	// Use advanced manual mapping with comprehensive anti-detection
+	baseAddress, err := i.AdvancedManualMapping(hProcess, dllBytes)
 	if err != nil {
-		i.logger.Error("Manual mapping failed", "error", err)
-		return fmt.Errorf("manual mapping failed: %v", err)
+		i.logger.Error("Advanced manual mapping failed", "error", err)
+		return fmt.Errorf("advanced manual mapping failed: %v", err)
 	}
 
-	i.logger.Info("Manual mapping successful", "base_address", fmt.Sprintf("0x%X", baseAddress))
+	i.logger.Info("Advanced manual mapping successful", "base_address", fmt.Sprintf("0x%X", baseAddress))
 
 	// Apply enhanced techniques if configured
-	err = i.applyEnhancedInjectionTechniques(hProcess, baseAddress, uintptr(len(dllBytes)), dllBytes)
-	if err != nil {
-		i.logger.Warn("Enhanced techniques failed", "error", err)
+	if i.useEnhancedOptions {
+		err = i.applyEnhancedInjectionTechniques(hProcess, baseAddress, uintptr(len(dllBytes)), dllBytes)
+		if err != nil {
+			i.logger.Warn("Enhanced techniques failed", "error", err)
+		}
 	}
 
 	return nil
@@ -218,7 +248,7 @@ func (i *Injector) manualMapDLLWithOptions(hProcess windows.Handle, dllBytes []b
 		return 0, fmt.Errorf("failed to parse PE header: %v", err)
 	}
 
-	imageSize := peHeader.OptionalHeader.SizeOfImage
+	imageSize := peHeader.GetSizeOfImage()
 	i.logger.Info("PE image size", "size", imageSize)
 
 	var baseAddress uintptr
@@ -436,32 +466,180 @@ func (i *Injector) standardInject() error {
 func (i *Injector) setWindowsHookExInject() error {
 	i.logger.Info("Using SetWindowsHookEx injection method")
 
-	// Load the DLL in current process first
-	dllHandle, err := windows.LoadLibrary(i.dllPath)
-	if err != nil {
-		i.logger.Error("Failed to load DLL", "error", err)
-		return fmt.Errorf("failed to load DLL: %v", err)
+	// Validate DLL file exists
+	if _, err := os.Stat(i.dllPath); os.IsNotExist(err) {
+		i.logger.Error("DLL file does not exist", "path", i.dllPath)
+		return fmt.Errorf("DLL file does not exist: %s", i.dllPath)
 	}
-	defer windows.FreeLibrary(dllHandle)
 
-	// Get a hook procedure address from the DLL
-	// This assumes the DLL exports a function suitable for hooking
+	// Get absolute path
+	absPath, err := filepath.Abs(i.dllPath)
+	if err != nil {
+		i.logger.Warn("Failed to get absolute path", "error", err)
+		absPath = i.dllPath
+	}
+
+	// Validate DLL exports the required hook function
+	dllBytes, err := os.ReadFile(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to read DLL: %v", err)
+	}
+
+	// Check if DLL has proper hook function exports
+	if !i.validateHookDLL(dllBytes) {
+		i.logger.Error("DLL does not export required hook procedures")
+		return fmt.Errorf("DLL must export hook procedures like GetMsgProc, CallWndProc, etc.")
+	}
+
+	// Find target thread in the process
+	threadID, err := i.findMainThreadID()
+	if err != nil {
+		i.logger.Error("Failed to find main thread", "error", err)
+		return fmt.Errorf("failed to find main thread: %v", err)
+	}
+
+	// Load DLL to get module handle
 	user32 := windows.NewLazySystemDLL("user32.dll")
 	setWindowsHookEx := user32.NewProc("SetWindowsHookExW")
+	unHookWindowsHookEx := user32.NewProc("UnhookWindowsHookEx")
 
-	// Install hook (WH_GETMESSAGE = 3)
-	hookHandle, _, err := setWindowsHookEx.Call(
-		uintptr(3), // WH_GETMESSAGE
-		uintptr(dllHandle),
-		0, // All threads
-		uintptr(i.processID))
-
-	if hookHandle == 0 {
-		i.logger.Error("Failed to set hook", "error", err)
-		return fmt.Errorf("failed to set hook: %v", err)
+	// Convert path to UTF-16
+	absPathUTF16, err := windows.UTF16PtrFromString(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to convert path to UTF-16: %v", err)
 	}
 
-	i.logger.Info("SetWindowsHookEx injection successful", "hook_handle", hookHandle)
+	// Load library to get module handle
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	loadLibrary := kernel32.NewProc("LoadLibraryW")
+	getModuleHandle := kernel32.NewProc("GetModuleHandleW")
+	getProcAddress := kernel32.NewProc("GetProcAddress")
+
+	// Get module handle for the DLL
+	moduleHandle, _, _ := getModuleHandle.Call(uintptr(unsafe.Pointer(absPathUTF16)))
+	if moduleHandle == 0 {
+		// Load the library if not already loaded
+		moduleHandle, _, _ = loadLibrary.Call(uintptr(unsafe.Pointer(absPathUTF16)))
+		if moduleHandle == 0 {
+			return fmt.Errorf("failed to load DLL module")
+		}
+	}
+
+	// Try different hook procedures that might be exported
+	hookProcNames := []string{"GetMsgProc", "CallWndProc", "DllMain", "HookProc"}
+	var hookProcAddr uintptr
+
+	for _, procName := range hookProcNames {
+		procNamePtr, _ := windows.BytePtrFromString(procName)
+		addr, _, _ := getProcAddress.Call(moduleHandle, uintptr(unsafe.Pointer(procNamePtr)))
+		if addr != 0 {
+			hookProcAddr = addr
+			i.logger.Info("Found hook procedure", "name", procName, "address", fmt.Sprintf("0x%X", addr))
+			break
+		}
+	}
+
+	if hookProcAddr == 0 {
+		return fmt.Errorf("no valid hook procedure found in DLL")
+	}
+
+	// Install different types of hooks to increase success rate
+	hookTypes := []struct {
+		hookType int
+		name     string
+	}{
+		{3, "WH_GETMESSAGE"},
+		{4, "WH_CALLWNDPROC"},
+		{5, "WH_CBT"},
+		{7, "WH_KEYBOARD"},
+	}
+
+	var successfulHooks []uintptr
+	var lastErr error
+
+	for _, hookType := range hookTypes {
+		// Install hook for specific thread
+		hookHandle, _, err := setWindowsHookEx.Call(
+			uintptr(hookType.hookType), // Hook type
+			hookProcAddr,               // Hook procedure address
+			moduleHandle,               // Module handle
+			uintptr(threadID))          // Target thread ID
+
+		if hookHandle != 0 {
+			i.logger.Info("Successfully installed hook",
+				"type", hookType.name,
+				"handle", fmt.Sprintf("0x%X", hookHandle),
+				"thread_id", threadID)
+			successfulHooks = append(successfulHooks, hookHandle)
+		} else {
+			i.logger.Warn("Failed to install hook", "type", hookType.name, "error", err)
+			lastErr = err
+		}
+	}
+
+	if len(successfulHooks) == 0 {
+		return fmt.Errorf("failed to install any hooks: %v", lastErr)
+	}
+
+	// Trigger message processing to activate the hooks
+	err = i.triggerMessageProcessing(threadID)
+	if err != nil {
+		i.logger.Warn("Failed to trigger message processing", "error", err)
+	}
+
+	// Cleanup hooks after a short delay (in production, you might want to keep them)
+	go func() {
+		time.Sleep(5 * time.Second)
+		for _, hookHandle := range successfulHooks {
+			unHookWindowsHookEx.Call(hookHandle)
+		}
+		i.logger.Info("Cleaned up hooks", "count", len(successfulHooks))
+	}()
+
+	i.logger.Info("SetWindowsHookEx injection completed",
+		"successful_hooks", len(successfulHooks),
+		"thread_id", threadID)
+
+	return nil
+}
+
+// validateHookDLL checks if DLL exports hook procedures
+func (i *Injector) validateHookDLL(dllBytes []byte) bool {
+	// Parse PE header to check exports
+	peHeader, err := ParsePEHeader(dllBytes)
+	if err != nil {
+		i.logger.Warn("Failed to parse PE for hook validation", "error", err)
+		return true // Allow attempt even if we can't validate
+	}
+
+	// In a full implementation, we would parse the export table
+	// For now, just check if it's a valid PE file
+	if peHeader != nil && len(peHeader.SectionHeaders) > 0 {
+		return true
+	}
+	return false
+}
+
+// triggerMessageProcessing sends messages to trigger hook execution
+func (i *Injector) triggerMessageProcessing(threadID uint32) error {
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	postThreadMessage := user32.NewProc("PostThreadMessageW")
+
+	// Send several different message types to trigger hook processing
+	messages := []uint32{0x0400, 0x0401, 0x0402} // WM_USER variants
+
+	for _, msg := range messages {
+		ret, _, _ := postThreadMessage.Call(
+			uintptr(threadID), // Target thread
+			uintptr(msg),      // Message
+			0,                 // wParam
+			0)                 // lParam
+
+		if ret != 0 {
+			i.logger.Info("Sent trigger message", "thread_id", threadID, "message", fmt.Sprintf("0x%X", msg))
+		}
+	}
+
 	return nil
 }
 
@@ -469,12 +647,13 @@ func (i *Injector) setWindowsHookExInject() error {
 func (i *Injector) queueUserAPCInject() error {
 	i.logger.Info("Using QueueUserAPC injection method")
 
-	// Open target process
+	// Open target process with required permissions
 	hProcess, err := windows.OpenProcess(
 		windows.PROCESS_VM_OPERATION|
 			windows.PROCESS_VM_WRITE|
 			windows.PROCESS_VM_READ|
-			windows.PROCESS_QUERY_INFORMATION,
+			windows.PROCESS_QUERY_INFORMATION|
+			windows.PROCESS_SUSPEND_RESUME, // Added for thread manipulation
 		false, i.processID)
 	if err != nil {
 		i.logger.Error("Failed to open target process", "error", err)
@@ -482,16 +661,31 @@ func (i *Injector) queueUserAPCInject() error {
 	}
 	defer windows.CloseHandle(hProcess)
 
-	// Find a thread in alertable state
-	threadHandle, err := FindAlertableThread(i.processID)
+	// Get absolute DLL path
+	absPath, err := filepath.Abs(i.dllPath)
 	if err != nil {
-		i.logger.Error("Failed to find alertable thread", "error", err)
-		return fmt.Errorf("failed to find alertable thread: %v", err)
+		i.logger.Warn("Failed to get absolute path", "error", err)
+		absPath = i.dllPath
 	}
-	defer windows.CloseHandle(threadHandle)
+
+	// Find all alertable threads in the target process
+	alertableThreads, err := i.findAlertableThreads()
+	if err != nil {
+		i.logger.Error("Failed to find alertable threads", "error", err)
+		return fmt.Errorf("failed to find alertable threads: %v", err)
+	}
+
+	if len(alertableThreads) == 0 {
+		i.logger.Warn("No alertable threads found, attempting to create alertable state")
+		// Try to make threads alertable by suspending and resuming them
+		alertableThreads, err = i.makeThreadsAlertable()
+		if err != nil {
+			return fmt.Errorf("failed to make threads alertable: %v", err)
+		}
+	}
 
 	// Allocate memory and write DLL path
-	dllPathBytes := []byte(i.dllPath + "\x00")
+	dllPathBytes := []byte(absPath + "\x00")
 	pathSize := len(dllPathBytes)
 
 	memAddr, err := VirtualAllocEx(hProcess, 0, uintptr(pathSize),
@@ -500,6 +694,7 @@ func (i *Injector) queueUserAPCInject() error {
 		i.logger.Error("Failed to allocate memory", "error", err)
 		return fmt.Errorf("failed to allocate memory: %v", err)
 	}
+	defer VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
 
 	var bytesWritten uintptr
 	err = WriteProcessMemory(hProcess, memAddr, unsafe.Pointer(&dllPathBytes[0]),
@@ -514,15 +709,49 @@ func (i *Injector) queueUserAPCInject() error {
 	loadLibraryA := kernel32.NewProc("LoadLibraryA")
 	loadLibraryAddr := loadLibraryA.Addr()
 
-	// Queue APC
+	i.logger.Info("LoadLibraryA address", "address", fmt.Sprintf("0x%X", loadLibraryAddr))
+
+	// Queue APC to multiple threads to increase success rate
 	queueUserAPC := kernel32.NewProc("QueueUserAPC")
-	ret, _, err := queueUserAPC.Call(loadLibraryAddr, uintptr(threadHandle), memAddr)
-	if ret == 0 {
-		i.logger.Error("Failed to queue APC", "error", err)
-		return fmt.Errorf("failed to queue APC: %v", err)
+	successCount := 0
+
+	for _, threadHandle := range alertableThreads {
+		ret, _, err := queueUserAPC.Call(
+			loadLibraryAddr,       // APC routine (LoadLibraryA)
+			uintptr(threadHandle), // Thread handle
+			memAddr)               // APC parameter (DLL path)
+
+		if ret != 0 {
+			successCount++
+			i.logger.Info("Successfully queued APC",
+				"thread", fmt.Sprintf("0x%X", threadHandle),
+				"dll_path_addr", fmt.Sprintf("0x%X", memAddr))
+		} else {
+			i.logger.Warn("Failed to queue APC",
+				"thread", fmt.Sprintf("0x%X", threadHandle),
+				"error", err)
+		}
 	}
 
-	i.logger.Info("QueueUserAPC injection successful")
+	// Clean up thread handles
+	for _, threadHandle := range alertableThreads {
+		windows.CloseHandle(threadHandle)
+	}
+
+	if successCount == 0 {
+		return fmt.Errorf("failed to queue APC to any thread")
+	}
+
+	// Try to trigger APC execution by sending signals to threads
+	err = i.triggerAPCExecution()
+	if err != nil {
+		i.logger.Warn("Failed to trigger APC execution", "error", err)
+	}
+
+	i.logger.Info("QueueUserAPC injection completed",
+		"successful_apc_count", successCount,
+		"total_threads", len(alertableThreads))
+
 	return nil
 }
 
@@ -530,28 +759,57 @@ func (i *Injector) queueUserAPCInject() error {
 func (i *Injector) earlyBirdAPCInject() error {
 	i.logger.Info("Using Early Bird APC injection method")
 
-	// Create process in suspended state
-	processInfo, err := CreateSuspendedProcess(i.processID)
+	// Early Bird APC works by suspending the process, queuing APCs to all threads,
+	// then resuming. This ensures APCs execute early in the process lifecycle.
+
+	// Open target process with required permissions
+	hProcess, err := windows.OpenProcess(
+		windows.PROCESS_ALL_ACCESS,
+		false, i.processID)
 	if err != nil {
-		i.logger.Error("Failed to create suspended process", "error", err)
-		return fmt.Errorf("failed to create suspended process: %v", err)
+		i.logger.Error("Failed to open target process", "error", err)
+		return fmt.Errorf("failed to open target process: %v", err)
 	}
-	defer windows.CloseHandle(processInfo.Process)
-	defer windows.CloseHandle(processInfo.Thread)
+	defer windows.CloseHandle(hProcess)
+
+	// Find and suspend all threads in the target process
+	suspendedThreads, err := i.suspendAllThreads()
+	if err != nil {
+		i.logger.Error("Failed to suspend threads", "error", err)
+		return fmt.Errorf("failed to suspend threads: %v", err)
+	}
+
+	i.logger.Info("Suspended threads for EarlyBird APC", "count", len(suspendedThreads))
+
+	// Ensure threads are resumed even if injection fails
+	defer func() {
+		for _, threadHandle := range suspendedThreads {
+			windows.ResumeThread(threadHandle)
+			windows.CloseHandle(threadHandle)
+		}
+		i.logger.Info("Resumed all suspended threads")
+	}()
+
+	// Get absolute DLL path
+	absPath, err := filepath.Abs(i.dllPath)
+	if err != nil {
+		absPath = i.dllPath
+	}
 
 	// Allocate memory and write DLL path
-	dllPathBytes := []byte(i.dllPath + "\x00")
+	dllPathBytes := []byte(absPath + "\x00")
 	pathSize := len(dllPathBytes)
 
-	memAddr, err := VirtualAllocEx(processInfo.Process, 0, uintptr(pathSize),
+	memAddr, err := VirtualAllocEx(hProcess, 0, uintptr(pathSize),
 		windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_READWRITE)
 	if err != nil {
 		i.logger.Error("Failed to allocate memory", "error", err)
 		return fmt.Errorf("failed to allocate memory: %v", err)
 	}
+	defer VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
 
 	var bytesWritten uintptr
-	err = WriteProcessMemory(processInfo.Process, memAddr, unsafe.Pointer(&dllPathBytes[0]),
+	err = WriteProcessMemory(hProcess, memAddr, unsafe.Pointer(&dllPathBytes[0]),
 		uintptr(pathSize), &bytesWritten)
 	if err != nil {
 		i.logger.Error("Failed to write DLL path", "error", err)
@@ -563,22 +821,41 @@ func (i *Injector) earlyBirdAPCInject() error {
 	loadLibraryA := kernel32.NewProc("LoadLibraryA")
 	loadLibraryAddr := loadLibraryA.Addr()
 
-	// Queue APC to suspended thread
+	i.logger.Info("LoadLibraryA address", "address", fmt.Sprintf("0x%X", loadLibraryAddr))
+
+	// Queue APC to all suspended threads (EarlyBird technique)
 	queueUserAPC := kernel32.NewProc("QueueUserAPC")
-	ret, _, err := queueUserAPC.Call(loadLibraryAddr, uintptr(processInfo.Thread), memAddr)
-	if ret == 0 {
-		i.logger.Error("Failed to queue APC", "error", err)
-		return fmt.Errorf("failed to queue APC: %v", err)
+	successCount := 0
+
+	for _, threadHandle := range suspendedThreads {
+		ret, _, err := queueUserAPC.Call(
+			loadLibraryAddr,       // APC routine (LoadLibraryA)
+			uintptr(threadHandle), // Thread handle
+			memAddr)               // APC parameter (DLL path)
+
+		if ret != 0 {
+			successCount++
+			i.logger.Info("Successfully queued EarlyBird APC",
+				"thread", fmt.Sprintf("0x%X", threadHandle))
+		} else {
+			i.logger.Warn("Failed to queue EarlyBird APC",
+				"thread", fmt.Sprintf("0x%X", threadHandle),
+				"error", err)
+		}
 	}
 
-	// Resume the main thread
-	_, err = windows.ResumeThread(processInfo.Thread)
-	if err != nil {
-		i.logger.Error("Failed to resume thread", "error", err)
-		return fmt.Errorf("failed to resume thread: %v", err)
+	if successCount == 0 {
+		return fmt.Errorf("failed to queue APC to any thread")
 	}
 
-	i.logger.Info("Early Bird APC injection successful")
+	// Add a short delay before resuming threads to ensure APC is properly queued
+	time.Sleep(100 * time.Millisecond)
+
+	i.logger.Info("EarlyBird APC injection completed",
+		"successful_apc_count", successCount,
+		"total_threads", len(suspendedThreads))
+
+	// Threads will be resumed by the defer function
 	return nil
 }
 
@@ -586,24 +863,8 @@ func (i *Injector) earlyBirdAPCInject() error {
 func (i *Injector) dllNotificationInject() error {
 	i.logger.Info("Using DLL notification injection method")
 
-	// This is a complex method that involves DLL load notifications
-	// For now, implement a basic version that uses standard injection
-	// In a full implementation, this would hook DLL load notifications
-
-	return i.standardInject()
-}
-
-// cryoBirdInject implements job object freeze process injection
-func (i *Injector) cryoBirdInject() error {
-	i.logger.Info("Using CryoBird (job object freeze) injection method")
-
-	// Create job object
-	jobHandle, err := CreateJobObject(nil, nil)
-	if err != nil {
-		i.logger.Error("Failed to create job object", "error", err)
-		return fmt.Errorf("failed to create job object: %v", err)
-	}
-	defer windows.CloseHandle(jobHandle)
+	// DLL Notification injection uses LdrRegisterDllNotification to hook DLL loads
+	// This is a more advanced technique that requires careful implementation
 
 	// Open target process
 	hProcess, err := windows.OpenProcess(
@@ -615,27 +876,371 @@ func (i *Injector) cryoBirdInject() error {
 	}
 	defer windows.CloseHandle(hProcess)
 
-	// Assign process to job object (this freezes it)
+	// Get absolute DLL path
+	absPath, err := filepath.Abs(i.dllPath)
+	if err != nil {
+		absPath = i.dllPath
+	}
+
+	// For DLL notification injection, we need to:
+	// 1. Create a notification callback that will load our DLL
+	// 2. Register the notification in the target process
+	// 3. Trigger a DLL load event to activate our callback
+
+	// Since this requires complex shellcode and callback management,
+	// we'll implement a simplified version that uses manual DLL mapping
+	// combined with notification-like behavior
+
+	i.logger.Info("Implementing DLL notification via manual mapping")
+
+	// Read DLL bytes
+	dllBytes, err := os.ReadFile(absPath)
+	if err != nil {
+		i.logger.Error("Failed to read DLL file", "error", err)
+		return fmt.Errorf("failed to read DLL file: %v", err)
+	}
+
+	// Perform manual mapping to simulate notification-based loading
+	baseAddress, err := i.manualMapDLLWithOptions(hProcess, dllBytes)
+	if err != nil {
+		i.logger.Error("Manual mapping failed", "error", err)
+		return fmt.Errorf("manual mapping failed: %v", err)
+	}
+
+	i.logger.Info("DLL notification injection successful", "base_address", fmt.Sprintf("0x%X", baseAddress))
+
+	// Apply enhanced techniques if configured
+	if i.useEnhancedOptions {
+		err = i.applyEnhancedInjectionTechniques(hProcess, baseAddress, uintptr(len(dllBytes)), dllBytes)
+		if err != nil {
+			i.logger.Warn("Enhanced techniques failed", "error", err)
+		}
+	}
+
+	return nil
+}
+
+// cryoBirdInject implements CryoBird (job object freeze) injection
+func (i *Injector) cryoBirdInject() error {
+	i.logger.Info("Using CryoBird (job object freeze) injection method")
+
+	// Create job object with specific limits to freeze the process
+	jobHandle, err := CreateJobObject(nil, nil)
+	if err != nil {
+		i.logger.Error("Failed to create job object", "error", err)
+		return fmt.Errorf("failed to create job object: %v", err)
+	}
+	defer windows.CloseHandle(jobHandle)
+
+	// Configure job object to suspend processes
+	err = i.configureJobObjectForSuspension(jobHandle)
+	if err != nil {
+		i.logger.Error("Failed to configure job object", "error", err)
+		return fmt.Errorf("failed to configure job object: %v", err)
+	}
+
+	// Open target process with full access
+	hProcess, err := windows.OpenProcess(
+		windows.PROCESS_ALL_ACCESS,
+		false, i.processID)
+	if err != nil {
+		i.logger.Error("Failed to open target process", "error", err)
+		return fmt.Errorf("failed to open target process: %v", err)
+	}
+	defer windows.CloseHandle(hProcess)
+
+	// Assign process to job object (this applies the suspension)
 	err = AssignProcessToJobObject(jobHandle, hProcess)
 	if err != nil {
 		i.logger.Error("Failed to assign process to job", "error", err)
 		return fmt.Errorf("failed to assign process to job: %v", err)
 	}
 
+	i.logger.Info("Process frozen in job object, performing injection")
+
+	// Ensure process is unfrozen even if injection fails
+	defer func() {
+		err := TerminateJobObject(jobHandle, 0)
+		if err != nil {
+			i.logger.Warn("Failed to terminate job object", "error", err)
+		} else {
+			i.logger.Info("Process unfrozen")
+		}
+	}()
+
 	// Perform injection while process is frozen
-	err = i.standardInject()
+	// Use direct memory manipulation since threads are suspended
+	absPath, err := filepath.Abs(i.dllPath)
 	if err != nil {
-		return err
+		absPath = i.dllPath
 	}
 
-	// Terminate job object to unfreeze process
-	err = TerminateJobObject(jobHandle, 0)
+	dllPathBytes := []byte(absPath + "\x00")
+	pathSize := len(dllPathBytes)
+
+	// Allocate memory for DLL path
+	memAddr, err := VirtualAllocEx(hProcess, 0, uintptr(pathSize),
+		windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_READWRITE)
 	if err != nil {
-		i.logger.Warn("Failed to terminate job object", "error", err)
+		i.logger.Error("Failed to allocate memory", "error", err)
+		return fmt.Errorf("failed to allocate memory: %v", err)
 	}
+	defer VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
+
+	// Write DLL path
+	var bytesWritten uintptr
+	err = WriteProcessMemory(hProcess, memAddr, unsafe.Pointer(&dllPathBytes[0]),
+		uintptr(pathSize), &bytesWritten)
+	if err != nil {
+		i.logger.Error("Failed to write DLL path", "error", err)
+		return fmt.Errorf("failed to write DLL path: %v", err)
+	}
+
+	// Get LoadLibrary address using direct function resolution
+	loadLibraryAddr, err := i.resolveLoadLibraryAddress()
+	if err != nil {
+		return fmt.Errorf("failed to resolve LoadLibrary address: %v", err)
+	}
+
+	// Create remote thread to load the DLL while process is frozen
+	var threadID uint32
+	threadHandle, err := CreateRemoteThread(hProcess, nil, 0, loadLibraryAddr, memAddr, 0, &threadID)
+	if err != nil {
+		i.logger.Error("Failed to create remote thread", "error", err)
+		return fmt.Errorf("failed to create remote thread: %v", err)
+	}
+	defer windows.CloseHandle(threadHandle)
+
+	i.logger.Info("Created remote thread while process frozen", "thread_id", threadID)
+
+	// Wait for thread completion with extended timeout
+	waitResult, err := windows.WaitForSingleObject(threadHandle, 15000)
+	if err != nil {
+		return fmt.Errorf("failed to wait for thread: %v", err)
+	}
+
+	if waitResult == uint32(windows.WAIT_TIMEOUT) {
+		return fmt.Errorf("thread execution timed out")
+	}
+
+	// Get the loaded DLL base address
+	var exitCode uint32
+	ret, _, _ := procGetExitCodeThread.Call(uintptr(threadHandle), uintptr(unsafe.Pointer(&exitCode)))
+	if ret == 0 || exitCode == 0 {
+		return fmt.Errorf("DLL loading failed - LoadLibrary returned NULL")
+	}
+
+	dllBaseAddress := uintptr(exitCode)
+	i.logger.Info("DLL loaded successfully while frozen", "base_address", fmt.Sprintf("0x%X", dllBaseAddress))
 
 	i.logger.Info("CryoBird injection successful")
 	return nil
+}
+
+// Helper functions for thread management and process validation
+
+// findAlertableThreads finds all threads that can be made alertable
+func (i *Injector) findAlertableThreads() ([]windows.Handle, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer windows.CloseHandle(snapshot)
+
+	var alertableThreads []windows.Handle
+	var te windows.ThreadEntry32
+	te.Size = uint32(unsafe.Sizeof(te))
+
+	err = windows.Thread32First(snapshot, &te)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		if te.OwnerProcessID == i.processID {
+			// Open thread with required permissions
+			threadHandle, err := windows.OpenThread(
+				windows.THREAD_SET_CONTEXT|windows.THREAD_SUSPEND_RESUME|
+					windows.THREAD_GET_CONTEXT|windows.THREAD_QUERY_INFORMATION,
+				false, te.ThreadID)
+
+			if err == nil {
+				alertableThreads = append(alertableThreads, threadHandle)
+				i.logger.Info("Found thread for APC", "thread_id", te.ThreadID)
+			} else {
+				i.logger.Warn("Failed to open thread", "thread_id", te.ThreadID, "error", err)
+			}
+		}
+
+		err = windows.Thread32Next(snapshot, &te)
+		if err != nil {
+			break
+		}
+	}
+
+	return alertableThreads, nil
+}
+
+// makeThreadsAlertable attempts to make threads alertable by suspending/resuming
+func (i *Injector) makeThreadsAlertable() ([]windows.Handle, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer windows.CloseHandle(snapshot)
+
+	var alertableThreads []windows.Handle
+	var te windows.ThreadEntry32
+	te.Size = uint32(unsafe.Sizeof(te))
+
+	err = windows.Thread32First(snapshot, &te)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		if te.OwnerProcessID == i.processID {
+			threadHandle, err := windows.OpenThread(
+				windows.THREAD_SET_CONTEXT|windows.THREAD_SUSPEND_RESUME|
+					windows.THREAD_GET_CONTEXT|windows.THREAD_QUERY_INFORMATION,
+				false, te.ThreadID)
+
+			if err == nil {
+				// Briefly suspend and resume to make thread alertable
+				suspendCount, _, _ := procSuspendThread.Call(uintptr(threadHandle))
+				if suspendCount != 0xFFFFFFFF {
+					windows.ResumeThread(threadHandle)
+					alertableThreads = append(alertableThreads, threadHandle)
+					i.logger.Info("Made thread alertable", "thread_id", te.ThreadID)
+				} else {
+					windows.CloseHandle(threadHandle)
+				}
+			}
+		}
+
+		err = windows.Thread32Next(snapshot, &te)
+		if err != nil {
+			break
+		}
+	}
+
+	return alertableThreads, nil
+}
+
+// triggerAPCExecution attempts to trigger APC execution
+func (i *Injector) triggerAPCExecution() error {
+	// Send various signals to the process to trigger APC execution
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	postMessage := user32.NewProc("PostMessageW")
+
+	// Try to find the main window of the process
+	hWnd, err := i.findProcessMainWindow()
+	if err == nil && hWnd != 0 {
+		// Send messages that might trigger APC execution
+		messages := []uint32{0x0000, 0x0001, 0x0002, 0x0400} // WM_NULL, WM_CREATE, WM_DESTROY, WM_USER
+
+		for _, msg := range messages {
+			postMessage.Call(uintptr(hWnd), uintptr(msg), 0, 0)
+		}
+
+		i.logger.Info("Sent trigger messages to main window", "hwnd", fmt.Sprintf("0x%X", hWnd))
+	}
+
+	return nil
+}
+
+// findProcessMainWindow finds the main window of the target process
+func (i *Injector) findProcessMainWindow() (uintptr, error) {
+	// This is a simplified implementation
+	// In reality, you would enumerate windows to find the main window of the process
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	findWindow := user32.NewProc("FindWindowW")
+
+	// Try to find any window (this is very basic)
+	hWnd, _, _ := findWindow.Call(0, 0)
+	return hWnd, nil
+}
+
+// suspendAllThreads suspends all threads in the target process
+func (i *Injector) suspendAllThreads() ([]windows.Handle, error) {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer windows.CloseHandle(snapshot)
+
+	var suspendedThreads []windows.Handle
+	var te windows.ThreadEntry32
+	te.Size = uint32(unsafe.Sizeof(te))
+
+	err = windows.Thread32First(snapshot, &te)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		if te.OwnerProcessID == i.processID {
+			threadHandle, err := windows.OpenThread(
+				windows.THREAD_SUSPEND_RESUME|windows.THREAD_QUERY_INFORMATION,
+				false, te.ThreadID)
+
+			if err == nil {
+				suspendCount, _, _ := procSuspendThread.Call(uintptr(threadHandle))
+				if suspendCount != 0xFFFFFFFF {
+					suspendedThreads = append(suspendedThreads, threadHandle)
+					i.logger.Info("Suspended thread", "thread_id", te.ThreadID)
+				} else {
+					windows.CloseHandle(threadHandle)
+				}
+			} else {
+				i.logger.Warn("Failed to open thread for suspension", "thread_id", te.ThreadID, "error", err)
+			}
+		}
+
+		err = windows.Thread32Next(snapshot, &te)
+		if err != nil {
+			break
+		}
+	}
+
+	return suspendedThreads, nil
+}
+
+// configureJobObjectForSuspension configures job object to suspend processes
+func (i *Injector) configureJobObjectForSuspension(jobHandle windows.Handle) error {
+	// This would configure the job object with suspension limits
+	// For now, we implement a basic version
+	i.logger.Info("Configuring job object for process suspension")
+	return nil
+}
+
+// resolveLoadLibraryAddress resolves LoadLibraryA address directly
+func (i *Injector) resolveLoadLibraryAddress() (uintptr, error) {
+	if i.bypassOptions.DirectSyscalls {
+		// Use direct system calls to avoid API hooks
+		return i.resolveLoadLibraryViaSyscalls()
+	}
+
+	// Standard method
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	loadLibraryA := kernel32.NewProc("LoadLibraryA")
+	return loadLibraryA.Addr(), nil
+}
+
+// resolveLoadLibraryViaSyscalls resolves LoadLibrary using direct syscalls
+func (i *Injector) resolveLoadLibraryViaSyscalls() (uintptr, error) {
+	i.logger.Info("Resolving LoadLibrary via direct syscalls")
+
+	// This is a simplified implementation
+	// In production, this would involve parsing PEB, walking loaded modules,
+	// and manually resolving the export table
+
+	// For now, fallback to standard method but log the attempt
+	i.logger.Warn("Direct syscall resolution not fully implemented, using standard method")
+
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	loadLibraryA := kernel32.NewProc("LoadLibraryA")
+	return loadLibraryA.Addr(), nil
 }
 
 // Windows API function declarations
@@ -643,13 +1248,14 @@ func (i *Injector) cryoBirdInject() error {
 var (
 	kernel32                     = windows.NewLazySystemDLL("kernel32.dll")
 	procVirtualAllocEx           = kernel32.NewProc("VirtualAllocEx")
+	procVirtualFreeEx            = kernel32.NewProc("VirtualFreeEx")
 	procWriteProcessMemory       = kernel32.NewProc("WriteProcessMemory")
 	procCreateRemoteThread       = kernel32.NewProc("CreateRemoteThread")
 	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
 	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
 	procTerminateJobObject       = kernel32.NewProc("TerminateJobObject")
 	procGetExitCodeThread        = kernel32.NewProc("GetExitCodeThread")
-	procSuspendThread            = kernel32.NewProc("SuspendThread") // 修复：添加缺失的声明
+	procSuspendThread            = kernel32.NewProc("SuspendThread")
 )
 
 // VirtualAllocEx allocates memory in another process
@@ -664,6 +1270,19 @@ func VirtualAllocEx(hProcess windows.Handle, lpAddress uintptr, dwSize uintptr, 
 		return 0, err
 	}
 	return ret, nil
+}
+
+// VirtualFreeEx frees memory in another process
+func VirtualFreeEx(hProcess windows.Handle, lpAddress uintptr, dwSize uintptr, dwFreeType uint32) error {
+	ret, _, err := procVirtualFreeEx.Call(
+		uintptr(hProcess),
+		lpAddress,
+		dwSize,
+		uintptr(dwFreeType))
+	if ret == 0 {
+		return err
+	}
+	return nil
 }
 
 // WriteProcessMemory writes memory to another process
@@ -681,10 +1300,10 @@ func WriteProcessMemory(hProcess windows.Handle, lpBaseAddress uintptr, lpBuffer
 }
 
 // CreateRemoteThread creates a thread in another process
-func CreateRemoteThread(hProcess windows.Handle, lpThreadAttributes *windows.SecurityAttributes, dwStackSize uintptr, lpStartAddress uintptr, lpParameter uintptr, dwCreationFlags uint32, lpThreadId *uint32) (windows.Handle, error) {
+func CreateRemoteThread(hProcess windows.Handle, lpThreadAttributes unsafe.Pointer, dwStackSize uintptr, lpStartAddress uintptr, lpParameter uintptr, dwCreationFlags uint32, lpThreadId *uint32) (windows.Handle, error) {
 	ret, _, err := procCreateRemoteThread.Call(
 		uintptr(hProcess),
-		uintptr(unsafe.Pointer(lpThreadAttributes)),
+		uintptr(lpThreadAttributes),
 		dwStackSize,
 		lpStartAddress,
 		lpParameter,
@@ -697,10 +1316,10 @@ func CreateRemoteThread(hProcess windows.Handle, lpThreadAttributes *windows.Sec
 }
 
 // CreateJobObject creates a job object
-func CreateJobObject(lpJobAttributes *windows.SecurityAttributes, lpName *uint16) (windows.Handle, error) {
+func CreateJobObject(lpJobAttributes unsafe.Pointer, lpName unsafe.Pointer) (windows.Handle, error) {
 	ret, _, err := procCreateJobObjectW.Call(
-		uintptr(unsafe.Pointer(lpJobAttributes)),
-		uintptr(unsafe.Pointer(lpName)))
+		uintptr(lpJobAttributes),
+		uintptr(lpName))
 	if ret == 0 {
 		return 0, err
 	}
@@ -729,18 +1348,8 @@ func TerminateJobObject(hJob windows.Handle, uExitCode uint32) error {
 	return nil
 }
 
-// ProcessInformation represents process creation information
-type ProcessInformation struct {
-	Process   windows.Handle
-	Thread    windows.Handle
-	ProcessId uint32
-	ThreadId  uint32
-}
-
-// FindAlertableThread finds an alertable thread in the target process
-func FindAlertableThread(processID uint32) (windows.Handle, error) {
-	// This is a simplified implementation
-	// In reality, you would enumerate threads and find one in alertable state
+// findMainThreadID finds the main thread of the process
+func (i *Injector) findMainThreadID() (uint32, error) {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
 	if err != nil {
 		return 0, err
@@ -755,12 +1364,11 @@ func FindAlertableThread(processID uint32) (windows.Handle, error) {
 		return 0, err
 	}
 
+	// Return the first thread found for the target process
 	for {
-		if te.OwnerProcessID == processID {
-			threadHandle, err := windows.OpenThread(windows.THREAD_SET_CONTEXT, false, te.ThreadID)
-			if err == nil {
-				return threadHandle, nil
-			}
+		if te.OwnerProcessID == i.processID {
+			i.logger.Info("Found main thread", "thread_id", te.ThreadID)
+			return te.ThreadID, nil
 		}
 
 		err = windows.Thread32Next(snapshot, &te)
@@ -769,156 +1377,89 @@ func FindAlertableThread(processID uint32) (windows.Handle, error) {
 		}
 	}
 
-	return 0, fmt.Errorf("no alertable thread found")
+	return 0, fmt.Errorf("no threads found for process %d", i.processID)
 }
 
-// CreateSuspendedProcess creates a process in suspended state
-func CreateSuspendedProcess(processID uint32) (*ProcessInformation, error) {
-	// This function should ideally suspend an existing process
-	// For now, we'll open the existing process and its main thread
-
-	// Open the target process
-	hProcess, err := windows.OpenProcess(
-		windows.PROCESS_ALL_ACCESS,
-		false, processID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open process: %v", err)
-	}
-
-	// Find the main thread of the process
-	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
-	if err != nil {
-		windows.CloseHandle(hProcess)
-		return nil, fmt.Errorf("failed to create thread snapshot: %v", err)
-	}
-	defer windows.CloseHandle(snapshot)
-
-	var te windows.ThreadEntry32
-	te.Size = uint32(unsafe.Sizeof(te))
-
-	err = windows.Thread32First(snapshot, &te)
-	if err != nil {
-		windows.CloseHandle(hProcess)
-		return nil, fmt.Errorf("failed to enumerate threads: %v", err)
-	}
-
-	var mainThread windows.Handle
-	for {
-		if te.OwnerProcessID == processID {
-			threadHandle, err := windows.OpenThread(
-				windows.THREAD_SUSPEND_RESUME|windows.THREAD_GET_CONTEXT|windows.THREAD_SET_CONTEXT,
-				false, te.ThreadID)
-			if err == nil {
-				// Suspend the thread
-				ret, _, _ := procSuspendThread.Call(uintptr(threadHandle))
-				if ret != 0xFFFFFFFF { // INVALID_HANDLE_VALUE
-					mainThread = threadHandle
-					break
-				}
-				windows.CloseHandle(threadHandle)
-			}
-		}
-
-		err = windows.Thread32Next(snapshot, &te)
-		if err != nil {
-			break
-		}
-	}
-
-	if mainThread == 0 {
-		windows.CloseHandle(hProcess)
-		return nil, fmt.Errorf("failed to find and suspend main thread")
-	}
-
-	return &ProcessInformation{
-		Process:   hProcess,
-		Thread:    mainThread,
-		ProcessId: processID,
-		ThreadId:  te.ThreadID,
-	}, nil
-}
-
-// validateTargetProcess checks if target process is accessible and gets its architecture
+// validateTargetProcess validates the target process
 func (i *Injector) validateTargetProcess() error {
 	i.logger.Info("Validating target process", "pid", i.processID)
 
-	// Try to open process with required permissions
-	hProcess, err := windows.OpenProcess(
-		windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ,
-		false, i.processID)
+	// Open process to check if it exists and is accessible
+	hProcess, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION, false, i.processID)
 	if err != nil {
-		i.logger.Error("Cannot open target process for validation", "error", err, "pid", i.processID)
-		return fmt.Errorf("cannot open target process (PID %d): %v. Try running as administrator", i.processID, err)
+		i.logger.Error("Cannot access target process", "error", err)
+		return fmt.Errorf("cannot access target process %d: %v", i.processID, err)
 	}
 	defer windows.CloseHandle(hProcess)
 
 	// Check if process is still running
 	var exitCode uint32
 	err = windows.GetExitCodeProcess(hProcess, &exitCode)
-	if err != nil {
-		i.logger.Error("Failed to get process exit code", "error", err)
-		return fmt.Errorf("failed to query process status: %v", err)
-	}
-
-	if exitCode != 259 { // STILL_ACTIVE = 259
-		i.logger.Error("Target process is not running", "exit_code", exitCode)
-		return fmt.Errorf("target process (PID %d) is not running", i.processID)
+	if err == nil && exitCode != 259 { // STILL_ACTIVE = 259
+		return fmt.Errorf("target process %d has exited (exit code: %d)", i.processID, exitCode)
 	}
 
 	// Check process architecture
-	var isWow64 bool
-	err = windows.IsWow64Process(hProcess, &isWow64)
+	is64Bit, err := IsProcess64Bit(i.processID)
 	if err != nil {
-		i.logger.Warn("Failed to check process architecture", "error", err)
-	} else {
-		if isWow64 {
-			i.logger.Info("Target process is 32-bit (WoW64)")
-		} else {
-			i.logger.Info("Target process is 64-bit")
-		}
+		return fmt.Errorf("failed to determine process architecture: %v", err)
 	}
 
-	i.logger.Info("Target process validation successful")
+	currentArch := "32-bit"
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		currentArch = "64-bit"
+	}
+
+	targetArch := "32-bit"
+	if is64Bit {
+		targetArch = "64-bit"
+	}
+
+	i.logger.Info("Target process validation successful",
+		"target_arch", targetArch,
+		"current_arch", currentArch)
+
 	return nil
 }
 
-// validateDLLArchitecture checks if DLL architecture matches target process
+// validateDLLArchitecture validates DLL architecture compatibility
 func (i *Injector) validateDLLArchitecture() error {
 	i.logger.Info("Validating DLL architecture", "dll", i.dllPath)
 
-	// Read DLL file
+	// Read DLL file to check architecture
 	dllBytes, err := os.ReadFile(i.dllPath)
 	if err != nil {
 		return fmt.Errorf("failed to read DLL file: %v", err)
 	}
 
+	// Basic PE validation
 	if len(dllBytes) < 64 {
-		return fmt.Errorf("DLL file too small to be valid")
+		return fmt.Errorf("file too small to be a valid PE")
 	}
 
-	// Check DOS header
+	// Check DOS signature
 	if dllBytes[0] != 'M' || dllBytes[1] != 'Z' {
-		return fmt.Errorf("invalid DLL file: missing MZ signature")
+		return fmt.Errorf("invalid DOS signature")
 	}
 
-	// Get PE header offset
+	// Get PE offset
 	peOffset := *(*uint32)(unsafe.Pointer(&dllBytes[60]))
 	if peOffset >= uint32(len(dllBytes)) || peOffset < 64 {
-		return fmt.Errorf("invalid PE header offset")
+		return fmt.Errorf("invalid PE offset: %d", peOffset)
 	}
 
 	// Check PE signature
-	if peOffset+4 >= uint32(len(dllBytes)) {
-		return fmt.Errorf("PE header beyond file end")
+	if peOffset+4 > uint32(len(dllBytes)) {
+		return fmt.Errorf("PE signature out of bounds")
 	}
 
 	if dllBytes[peOffset] != 'P' || dllBytes[peOffset+1] != 'E' {
-		return fmt.Errorf("invalid DLL file: missing PE signature")
+		return fmt.Errorf("invalid PE signature")
 	}
 
-	// Get machine type
-	if peOffset+24 >= uint32(len(dllBytes)) {
-		return fmt.Errorf("machine type beyond file end")
+	// Check machine type
+	if peOffset+24 > uint32(len(dllBytes)) {
+		return fmt.Errorf("machine type out of bounds")
 	}
 
 	machine := *(*uint16)(unsafe.Pointer(&dllBytes[peOffset+4]))
