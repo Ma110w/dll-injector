@@ -37,6 +37,7 @@ type BypassOptions struct {
 	RemoveVADNode         bool
 	ThreadStackAllocation bool
 	DirectSyscalls        bool
+	SkipDllMain           bool // Skip DllMain execution for problematic DLLs
 }
 
 // Injector represents a DLL injector instance
@@ -49,6 +50,13 @@ type Injector struct {
 	useEnhancedOptions bool
 	logger             Logger
 }
+
+// Configuration constants for consistent timeouts
+const (
+	DefaultTimeoutShort  = 5 * time.Second  // For quick operations
+	DefaultTimeoutMedium = 10 * time.Second // For normal operations
+	DefaultTimeoutLong   = 15 * time.Second // For complex operations
+)
 
 // NewInjector creates a new injector instance
 func NewInjector(dllPath string, processID uint32, logger Logger) *Injector {
@@ -133,8 +141,8 @@ func (i *Injector) SetEnhancedBypassOptions(options EnhancedBypassOptions) {
 	i.useEnhancedOptions = true
 }
 
-// Inject performs DLL injection using the configured method
-func (i *Injector) Inject() error {
+// validateConfiguration performs comprehensive parameter validation
+func (i *Injector) validateConfiguration() error {
 	if i.logger == nil {
 		return fmt.Errorf("logger not initialized")
 	}
@@ -148,6 +156,21 @@ func (i *Injector) Inject() error {
 	if i.processID == 0 {
 		i.logger.Error("Process ID is invalid")
 		return fmt.Errorf("process ID cannot be 0")
+	}
+
+	// Validate method compatibility
+	if i.method < 0 || int(i.method) > 5 {
+		return fmt.Errorf("invalid injection method: %d", i.method)
+	}
+
+	return nil
+}
+
+// Inject performs DLL injection using the configured method
+func (i *Injector) Inject() error {
+	// Comprehensive validation before injection
+	if err := i.validateConfiguration(); err != nil {
+		return fmt.Errorf("configuration validation failed: %v", err)
 	}
 
 	// Additional process access validation
@@ -177,56 +200,89 @@ func (i *Injector) Inject() error {
 		return fmt.Errorf("invalid PE file: %v", err)
 	}
 
-	// Check process architecture and permissions
-	err = i.validateTargetProcess()
+	// Enhanced automatic architecture detection and validation
+	i.logger.Info("Performing comprehensive architecture analysis")
+	archCompat, err := ValidateDLLCompatibility(i.processID, dllBytes)
 	if err != nil {
-		return fmt.Errorf("target process validation failed: %v", err)
+		i.logger.Error("Architecture compatibility check failed", "error", err)
+		return fmt.Errorf("architecture compatibility check failed: %v", err)
 	}
 
-	// Validate DLL architecture
-	err = i.validateDLLArchitecture()
-	if err != nil {
-		return fmt.Errorf("DLL validation failed: %v", err)
+	// Log detailed architecture information
+	i.logger.Info("Architecture analysis completed",
+		"process_arch", archCompat.ProcessArch.ProcessArch,
+		"dll_arch", archCompat.DLLArch.Architecture,
+		"compatible", archCompat.Compatible,
+		"is_wow64", archCompat.ProcessArch.IsWow64)
+
+	// Handle architecture incompatibility with automatic recommendations
+	if !archCompat.Compatible {
+		i.logger.Error("Architecture mismatch detected")
+		for _, recommendation := range archCompat.Recommendations {
+			i.logger.Error("Recommendation", "suggestion", recommendation)
+		}
+		return fmt.Errorf("architecture mismatch: %s",
+			archCompat.Recommendations[0]) // Return first recommendation as error
 	}
 
-	i.logger.Info("Starting injection", "method", methodToString(i.method), "dll", i.dllPath, "pid", i.processID)
+	// Log compatibility confirmation and any special considerations
+	for _, recommendation := range archCompat.Recommendations {
+		i.logger.Info("Architecture analysis", "note", recommendation)
+	}
+
+	// Apply architecture-specific optimizations to injection strategies
+	if archCompat.ProcessArch.IsWow64 {
+		i.logger.Info("WOW64 process detected - applying WOW64-specific optimizations")
+		// For WOW64 processes, certain injection methods work better
+		if i.method == SetWindowsHookExInjection {
+			i.logger.Info("SetWindowsHookEx recommended for WOW64 processes")
+		}
+	}
+
+	// Check and handle DLL signature
+	signedDllBytes, err := i.handleDLLSignature(dllBytes)
+	if err != nil {
+		i.logger.Warn("Signature processing failed", "error", err)
+		// Continue with original DLL if signature handling fails
+		signedDllBytes = dllBytes
+	} else {
+		// Use the signed DLL bytes for injection
+		dllBytes = signedDllBytes
+	}
+
+	// For disk-based injection methods, save signed DLL to temporary file
+	var tempSignedPath string
+	if !i.bypassOptions.MemoryLoad && !i.bypassOptions.ManualMapping {
+		// Check if we need to use disk-based injection
+		needsDiskFile := i.method == StandardInjection ||
+			i.method == SetWindowsHookExInjection ||
+			i.bypassOptions.PathSpoofing
+
+		if needsDiskFile && len(signedDllBytes) != len(dllBytes) {
+			// DLL was modified with signature, save to temp file
+			tempSignedPath, err = i.saveTempSignedDLL(signedDllBytes)
+			if err != nil {
+				i.logger.Warn("Failed to save temporary signed file", "error", err)
+			} else {
+				// Update DLL path to use signed version
+				originalPath := i.dllPath
+				i.dllPath = tempSignedPath
+				defer func() {
+					// Clean up temporary file
+					os.Remove(tempSignedPath)
+					i.dllPath = originalPath // Restore original path
+				}()
+			}
+		}
+	}
+
+	i.logger.Info("Starting injection with auto-recovery", "method", methodToString(i.method), "dll", i.dllPath, "pid", i.processID)
 
 	// Log injection attempt
 	LogInjectionAttempt(methodToString(i.method), i.processID, i.dllPath, false)
 
-	var injectionErr error
-
-	// Handle memory load with bypass options
-	if i.bypassOptions.MemoryLoad {
-		injectionErr = i.memoryLoadDLL(dllBytes)
-	} else if i.bypassOptions.ManualMapping {
-		// Handle manual mapping
-		injectionErr = i.manualMapDLL(dllBytes)
-	} else if i.bypassOptions.PathSpoofing {
-		// Handle path spoofing
-		injectionErr = i.spoofDLLPath()
-	} else if i.bypassOptions.LegitProcessInjection {
-		// Handle legitimate process injection
-		injectionErr = i.legitProcessInject(dllBytes)
-	} else {
-		// Standard injection methods
-		switch i.method {
-		case StandardInjection:
-			injectionErr = i.standardInject()
-		case SetWindowsHookExInjection:
-			injectionErr = i.setWindowsHookExInject()
-		case QueueUserAPCInjection:
-			injectionErr = i.queueUserAPCInject()
-		case EarlyBirdAPCInjection:
-			injectionErr = i.earlyBirdAPCInject()
-		case DllNotificationInjection:
-			injectionErr = i.dllNotificationInject()
-		case CryoBirdInjection:
-			injectionErr = i.cryoBirdInject()
-		default:
-			injectionErr = fmt.Errorf("unsupported injection method: %d", i.method)
-		}
-	}
+	// Attempt injection with automatic recovery
+	injectionErr := i.attemptInjectionWithRecovery(dllBytes)
 
 	// Log injection result
 	LogInjectionAttempt(methodToString(i.method), i.processID, i.dllPath, injectionErr == nil)
@@ -412,7 +468,7 @@ func (i *Injector) manualMapDLLWithOptions(hProcess windows.Handle, dllBytes []b
 	i.logger.Info("Memory allocated", "address", fmt.Sprintf("0x%X", baseAddress))
 
 	// Map PE sections
-	err = MapSections(hProcess, dllBytes, baseAddress, peHeader)
+	err = i.MapSections(hProcess, dllBytes, baseAddress, peHeader)
 	if err != nil {
 		return 0, fmt.Errorf("failed to map PE sections: %v", err)
 	}
@@ -486,7 +542,7 @@ func (i *Injector) standardInject() error {
 		i.logger.Error("Failed to open target process", "error", err, "pid", i.processID)
 		// Provide helpful error message based on common issues
 		if err.Error() == "Access is denied." {
-			return fmt.Errorf("access denied - try running as administrator or check if target process is protected")
+			return fmt.Errorf("access denied - target process may be protected or require elevated privileges (WARNING: only use elevated privileges for legitimate testing)")
 		}
 		return fmt.Errorf("failed to open target process: %v", err)
 	}
@@ -566,7 +622,7 @@ func (i *Injector) standardInject() error {
 
 	// Wait for thread completion with detailed logging
 	i.logger.Info("Waiting for thread completion...")
-	waitResult, err := windows.WaitForSingleObject(threadHandle, 10000) // Increased timeout to 10 seconds
+	waitResult, err := windows.WaitForSingleObject(threadHandle, uint32(DefaultTimeoutMedium.Milliseconds()))
 	if err != nil {
 		i.logger.Error("Failed to wait for thread", "error", err)
 		return fmt.Errorf("failed to wait for thread: %v", err)
@@ -947,9 +1003,11 @@ func (i *Injector) queueUserAPCInject() error {
 		}
 	}
 
-	// Clean up thread handles
-	for _, threadHandle := range alertableThreads {
-		windows.CloseHandle(threadHandle)
+	// Clean up thread handles with error handling
+	for idx, threadHandle := range alertableThreads {
+		if err := windows.CloseHandle(threadHandle); err != nil {
+			i.logger.Warn("Failed to close thread handle", "index", idx, "error", err)
+		}
 	}
 
 	if successCount == 0 {
@@ -1840,4 +1898,344 @@ func (i *Injector) validateDLLArchitecture() error {
 
 	i.logger.Info("DLL validation completed", "is_dll", isDll)
 	return nil
+}
+
+// attemptInjectionWithRecovery attempts injection with automatic fallback to other methods
+func (i *Injector) attemptInjectionWithRecovery(dllBytes []byte) error {
+	i.logger.Info("Starting injection with automatic recovery enabled")
+
+	// Create a list of injection strategies to try
+	strategies := i.buildInjectionStrategies(dllBytes)
+
+	var lastError error
+	var attemptedMethods []string
+
+	for idx, strategy := range strategies {
+		i.logger.Info("Attempting injection strategy", "index", idx+1, "total", len(strategies),
+			"method", strategy.Name, "description", strategy.Description)
+
+		// Apply strategy configuration
+		originalMethod := i.method
+		originalBypass := i.bypassOptions
+
+		i.method = strategy.Method
+		i.bypassOptions = strategy.BypassOptions
+
+		// Attempt injection
+		err := i.executeInjectionStrategy(strategy, dllBytes)
+
+		// Track attempted methods
+		attemptedMethods = append(attemptedMethods, strategy.Name)
+
+		if err == nil {
+			i.logger.Info("Injection successful with strategy", "method", strategy.Name,
+				"attempts", len(attemptedMethods))
+			return nil
+		}
+
+		i.logger.Warn("Injection strategy failed", "method", strategy.Name, "error", err)
+		lastError = err
+
+		// Restore original configuration
+		i.method = originalMethod
+		i.bypassOptions = originalBypass
+
+		// Check if we should continue trying other methods
+		if !i.shouldContinueRecovery(err, idx, len(strategies)) {
+			i.logger.Info("Stopping recovery attempts", "reason", "non-recoverable error or strategy limit")
+			break
+		}
+
+		// Small delay between attempts to avoid overwhelming the target
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// All strategies failed
+	return fmt.Errorf("all injection strategies failed (tried: %v). Last error: %v",
+		attemptedMethods, lastError)
+}
+
+// InjectionStrategy represents a specific injection approach
+type InjectionStrategy struct {
+	Name          string
+	Description   string
+	Method        InjectionMethod
+	BypassOptions BypassOptions
+	Priority      int
+	Compatibility []string // Target process types this works well with
+}
+
+// buildInjectionStrategies creates a prioritized list of injection strategies with architecture awareness
+func (i *Injector) buildInjectionStrategies(dllBytes []byte) []InjectionStrategy {
+	i.logger.Info("Building injection strategies with automatic architecture optimization")
+
+	var strategies []InjectionStrategy
+
+	// Perform automatic architecture detection for strategy optimization
+	archCompat, err := ValidateDLLCompatibility(i.processID, dllBytes)
+	if err != nil {
+		i.logger.Warn("Could not detect architecture for strategy optimization", "error", err)
+		// Continue with default strategies if detection fails
+	} else {
+		i.logger.Info("Architecture-aware strategy building",
+			"process_arch", archCompat.ProcessArch.ProcessArch,
+			"dll_arch", archCompat.DLLArch.Architecture,
+			"is_wow64", archCompat.ProcessArch.IsWow64)
+	}
+
+	// Strategy 1: User's preferred method first (if not already failed)
+	if i.shouldTryMethod(i.method) {
+		strategies = append(strategies, InjectionStrategy{
+			Name:          fmt.Sprintf("User Preferred (%s)", methodToString(i.method)),
+			Description:   "User's originally selected injection method",
+			Method:        i.method,
+			BypassOptions: i.bypassOptions,
+			Priority:      10,
+			Compatibility: []string{"all"},
+		})
+	}
+
+	// Architecture-specific strategy prioritization
+	if archCompat != nil && archCompat.Compatible {
+		// Strategy 2: Architecture-optimized Memory Load
+		if !i.bypassOptions.MemoryLoad && i.shouldTryMethod(StandardInjection) {
+			priority := 9
+			description := "Memory-only loading with standard injection"
+
+			// Boost priority for WOW64 processes as memory load works well
+			if archCompat.ProcessArch.IsWow64 {
+				priority = 10
+				description += " (optimized for WOW64)"
+			}
+
+			strategies = append(strategies, InjectionStrategy{
+				Name:        "Architecture-Optimized Memory Load",
+				Description: description,
+				Method:      StandardInjection,
+				BypassOptions: BypassOptions{
+					MemoryLoad:      true,
+					ErasePEHeader:   false,
+					EraseEntryPoint: false,
+					DirectSyscalls:  i.bypassOptions.DirectSyscalls,
+				},
+				Priority:      priority,
+				Compatibility: []string{"architecture-optimized", "stable"},
+			})
+		}
+
+		// Strategy 3: Architecture-aware Manual Mapping
+		if !i.bypassOptions.ManualMapping && i.shouldTryMethod(StandardInjection) {
+			priority := 8
+			description := "Manual PE mapping without Windows loader"
+
+			// For 64-bit processes, manual mapping often works better
+			if archCompat.ProcessArch.Is64Bit && !archCompat.ProcessArch.IsWow64 {
+				priority = 9
+				description += " (optimized for native 64-bit)"
+			}
+
+			strategies = append(strategies, InjectionStrategy{
+				Name:        "Architecture-Aware Manual Mapping",
+				Description: description,
+				Method:      StandardInjection,
+				BypassOptions: BypassOptions{
+					ManualMapping:   true,
+					InvisibleMemory: true,
+					DirectSyscalls:  true,
+				},
+				Priority:      priority,
+				Compatibility: []string{"advanced", "stealth", "architecture-aware"},
+			})
+		}
+
+		// Strategy 4: WOW64-optimized QueueUserAPC (excellent for 32-bit on 64-bit)
+		if i.shouldTryMethod(QueueUserAPCInjection) {
+			priority := 7
+			description := "APC injection with memory loading"
+			compatibility := []string{"gui", "threaded"}
+
+			if archCompat.ProcessArch.IsWow64 {
+				priority = 8
+				description += " (WOW64-optimized)"
+				compatibility = append(compatibility, "wow64-optimized")
+			}
+
+			strategies = append(strategies, InjectionStrategy{
+				Name:        "Architecture-Optimized QueueUserAPC",
+				Description: description,
+				Method:      QueueUserAPCInjection,
+				BypassOptions: BypassOptions{
+					MemoryLoad:     true,
+					DirectSyscalls: true,
+				},
+				Priority:      priority,
+				Compatibility: compatibility,
+			})
+		}
+
+		// Strategy 5: SetWindowsHookEx (excellent for WOW64 GUI processes)
+		if i.shouldTryMethod(SetWindowsHookExInjection) {
+			priority := 6
+			description := "Hook-based injection for GUI applications"
+
+			// SetWindowsHookEx works exceptionally well with WOW64 processes
+			if archCompat.ProcessArch.IsWow64 {
+				priority = 8
+				description += " (highly recommended for WOW64)"
+			}
+
+			strategies = append(strategies, InjectionStrategy{
+				Name:          "WOW64-Optimized SetWindowsHookEx",
+				Description:   description,
+				Method:        SetWindowsHookExInjection,
+				BypassOptions: BypassOptions{
+					// No memory load options (incompatible)
+				},
+				Priority:      priority,
+				Compatibility: []string{"gui", "windowed", "wow64-excellent"},
+			})
+		}
+	}
+
+	// Fallback strategies (independent of architecture detection)
+
+	// Strategy 6: Early Bird APC
+	if i.shouldTryMethod(EarlyBirdAPCInjection) {
+		strategies = append(strategies, InjectionStrategy{
+			Name:        "Early Bird APC",
+			Description: "APC injection during process initialization",
+			Method:      EarlyBirdAPCInjection,
+			BypassOptions: BypassOptions{
+				MemoryLoad: true,
+			},
+			Priority:      6,
+			Compatibility: []string{"startup", "initialization"},
+		})
+	}
+
+	// Strategy 7: Standard Injection (universal compatibility)
+	if i.shouldTryMethod(StandardInjection) {
+		strategies = append(strategies, InjectionStrategy{
+			Name:          "Universal Standard Injection",
+			Description:   "Basic CreateRemoteThread injection (maximum compatibility)",
+			Method:        StandardInjection,
+			BypassOptions: BypassOptions{
+				// Minimal bypass options for maximum compatibility
+			},
+			Priority:      5,
+			Compatibility: []string{"basic", "compatible", "universal"},
+		})
+	}
+
+	// Strategy 8: CryoBird (advanced technique)
+	if i.shouldTryMethod(CryoBirdInjection) {
+		strategies = append(strategies, InjectionStrategy{
+			Name:        "CryoBird (Job Object)",
+			Description: "Cold injection using job object suspension",
+			Method:      CryoBirdInjection,
+			BypassOptions: BypassOptions{
+				DirectSyscalls: true,
+			},
+			Priority:      4,
+			Compatibility: []string{"advanced", "cold"},
+		})
+	}
+
+	// Strategy 9: Last resort with automatic recovery
+	strategies = append(strategies, InjectionStrategy{
+		Name:        "Auto-Recovery Minimal",
+		Description: "Standard injection with automatic error recovery (last resort)",
+		Method:      StandardInjection,
+		BypassOptions: BypassOptions{
+			SkipDllMain: true, // Skip problematic DllMain automatically
+		},
+		Priority:      1,
+		Compatibility: []string{"last-resort", "minimal", "auto-recovery"},
+	})
+
+	// Sort strategies by priority (higher priority first)
+	for i := 0; i < len(strategies)-1; i++ {
+		for j := i + 1; j < len(strategies); j++ {
+			if strategies[i].Priority < strategies[j].Priority {
+				strategies[i], strategies[j] = strategies[j], strategies[i]
+			}
+		}
+	}
+
+	// Log the final strategy order
+	i.logger.Info("Built architecture-aware injection strategies", "count", len(strategies))
+	for idx, strategy := range strategies {
+		i.logger.Debug("Strategy order", "rank", idx+1, "name", strategy.Name,
+			"priority", strategy.Priority, "compatibility", strategy.Compatibility)
+	}
+
+	return strategies
+}
+
+// shouldTryMethod checks if a method should be attempted based on previous failures
+func (i *Injector) shouldTryMethod(method InjectionMethod) bool {
+	// For now, allow all methods. In a full implementation,
+	// you would track failed methods to avoid infinite retries
+	return true
+}
+
+// executeInjectionStrategy executes a specific injection strategy
+func (i *Injector) executeInjectionStrategy(strategy InjectionStrategy, dllBytes []byte) error {
+	i.logger.Info("Executing injection strategy", "name", strategy.Name, "method", methodToString(strategy.Method))
+
+	// Handle memory load with bypass options
+	if strategy.BypassOptions.MemoryLoad {
+		return i.memoryLoadDLL(dllBytes)
+	} else if strategy.BypassOptions.ManualMapping {
+		// Handle manual mapping
+		return i.manualMapDLL(dllBytes)
+	} else if strategy.BypassOptions.PathSpoofing {
+		// Handle path spoofing
+		return i.spoofDLLPath()
+	} else if strategy.BypassOptions.LegitProcessInjection {
+		// Handle legitimate process injection
+		return i.legitProcessInject(dllBytes)
+	} else {
+		// Standard injection methods
+		switch strategy.Method {
+		case StandardInjection:
+			return i.standardInject()
+		case SetWindowsHookExInjection:
+			return i.setWindowsHookExInject()
+		case QueueUserAPCInjection:
+			return i.queueUserAPCInject()
+		case EarlyBirdAPCInjection:
+			return i.earlyBirdAPCInject()
+		case DllNotificationInjection:
+			return i.dllNotificationInject()
+		case CryoBirdInjection:
+			return i.cryoBirdInject()
+		default:
+			return fmt.Errorf("unsupported injection method: %d", strategy.Method)
+		}
+	}
+}
+
+// shouldContinueRecovery determines if recovery attempts should continue
+func (i *Injector) shouldContinueRecovery(err error, attemptIndex, totalAttempts int) bool {
+	// Stop if this is the last attempt
+	if attemptIndex >= totalAttempts-1 {
+		return false
+	}
+
+	// Stop on critical errors that affect all methods
+	if strings.Contains(err.Error(), "access denied") ||
+		strings.Contains(err.Error(), "process not found") ||
+		strings.Contains(err.Error(), "target process has exited") {
+		i.logger.Info("Stopping recovery due to critical error", "error", err)
+		return false
+	}
+
+	// Stop if too many attempts (safety limit)
+	if attemptIndex >= 5 {
+		i.logger.Info("Stopping recovery due to attempt limit", "attempts", attemptIndex+1)
+		return false
+	}
+
+	return true
 }

@@ -471,7 +471,8 @@ func ManualMapDLL(hProcess windows.Handle, dllBytes []byte) (uintptr, error) {
 
 	// 映射PE文件各节到远程进程内存
 	Printf("Starting to map PE sections to remote process memory...\n")
-	err = MapSections(hProcess, dllBytes, baseAddress, peHeader)
+	tempInjector := &Injector{} // Create temporary injector instance for method calls
+	err = tempInjector.MapSections(hProcess, dllBytes, baseAddress, peHeader)
 	if err != nil {
 		return 0, fmt.Errorf("Failed to map PE sections: %v", err)
 	}

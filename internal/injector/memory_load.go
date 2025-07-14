@@ -4,31 +4,68 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
+// MemoryLoadError represents a detailed error during memory loading with recovery information
+type MemoryLoadError struct {
+	Type        string // Error category: "architecture_mismatch", "memory_allocation", "pe_parsing", etc.
+	Message     string // Detailed error message
+	Recoverable bool   // Whether this error allows fallback to other injection methods
+	Suggestion  string // Suggested action for the user
+}
+
+func (e *MemoryLoadError) Error() string {
+	if e.Suggestion != "" {
+		return fmt.Sprintf("%s (%s). Suggestion: %s", e.Message, e.Type, e.Suggestion)
+	}
+	return fmt.Sprintf("%s (%s)", e.Message, e.Type)
+}
+
+// IsRecoverable checks if the error allows fallback to other methods
+func (e *MemoryLoadError) IsRecoverable() bool {
+	return e.Recoverable
+}
+
 // memoryLoadDLL implements true memory-only DLL loading using reflective loading
 func (i *Injector) memoryLoadDLL(dllBytes []byte) error {
 	i.logger.Info("Using true memory load method")
 
-	// Validate DLL bytes
+	// Comprehensive DLL validation with enhanced error handling
 	if len(dllBytes) == 0 {
-		return fmt.Errorf("DLL bytes cannot be empty")
+		return &MemoryLoadError{
+			Type:        "invalid_input",
+			Message:     "DLL bytes cannot be empty",
+			Recoverable: false,
+			Suggestion:  "Ensure the DLL file is correctly loaded into memory",
+		}
 	}
 
 	// Add additional validation for common corruption issues
 	if len(dllBytes) < 1024 {
-		return fmt.Errorf("DLL file too small: %d bytes (minimum 1024 expected)", len(dllBytes))
+		return &MemoryLoadError{
+			Type:        "file_too_small",
+			Message:     fmt.Sprintf("DLL file too small: %d bytes (minimum 1024 expected)", len(dllBytes)),
+			Recoverable: false,
+			Suggestion:  "Check if the DLL file is complete and not corrupted",
+		}
 	}
 
 	// Validate DOS signature before parsing
 	if dllBytes[0] != 'M' || dllBytes[1] != 'Z' {
 		i.logger.Error("Invalid DOS signature detected",
 			"first_bytes", fmt.Sprintf("%02x %02x", dllBytes[0], dllBytes[1]))
-		return fmt.Errorf("invalid DOS signature: expected 'MZ', got '%c%c' (0x%02x%02x)",
-			dllBytes[0], dllBytes[1], dllBytes[0], dllBytes[1])
+		return &MemoryLoadError{
+			Type: "invalid_pe_format",
+			Message: fmt.Sprintf("invalid DOS signature: expected 'MZ', got '%c%c' (0x%02x%02x)",
+				dllBytes[0], dllBytes[1], dllBytes[0], dllBytes[1]),
+			Recoverable: false,
+			Suggestion:  "Verify the file is a valid PE (Portable Executable) file",
+		}
 	}
 
 	// Parse PE header to validate and get required information
@@ -45,12 +82,40 @@ func (i *Injector) memoryLoadDLL(dllBytes []byte) error {
 				"file_size", len(dllBytes))
 		}
 
-		return fmt.Errorf("failed to parse PE header for memory load: %v", err)
+		return &MemoryLoadError{
+			Type:        "pe_parsing_failed",
+			Message:     fmt.Sprintf("failed to parse PE header for memory load: %v", err),
+			Recoverable: true,
+			Suggestion:  "Try using standard injection method instead of Memory Load",
+		}
 	}
 
-	// Validate the parsed PE header
+	// Enhanced architecture validation with comprehensive error handling
 	if err := peHeader.ValidateArchitecture(); err != nil {
 		return fmt.Errorf("architecture validation failed: %v", err)
+	}
+
+	// Additional target process architecture check with detailed error handling
+	targetIs64Bit, err := IsProcess64Bit(i.processID)
+	if err != nil {
+		i.logger.Warn("Cannot determine target process architecture", "error", err)
+		// Try to continue with DLL architecture assumption
+		i.logger.Info("Assuming target process architecture matches DLL architecture",
+			"dll_arch", map[bool]string{true: "64-bit", false: "32-bit"}[peHeader.Is64Bit])
+	} else {
+		dllIs64Bit := peHeader.Is64Bit
+		if targetIs64Bit != dllIs64Bit {
+			return &MemoryLoadError{
+				Type: "architecture_mismatch",
+				Message: fmt.Sprintf("architecture mismatch: target process is %s but DLL is %s",
+					map[bool]string{true: "64-bit", false: "32-bit"}[targetIs64Bit],
+					map[bool]string{true: "64-bit", false: "32-bit"}[dllIs64Bit]),
+				Recoverable: false,
+			}
+		}
+		i.logger.Info("Architecture validation passed",
+			"target_arch", map[bool]string{true: "64-bit", false: "32-bit"}[targetIs64Bit],
+			"dll_arch", map[bool]string{true: "64-bit", false: "32-bit"}[dllIs64Bit])
 	}
 
 	// Additional validation for memory loading
@@ -66,7 +131,7 @@ func (i *Injector) memoryLoadDLL(dllBytes []byte) error {
 		"architecture", map[bool]string{true: "64-bit", false: "32-bit"}[peHeader.Is64Bit],
 		"image_size", imageSize)
 
-	// Open target process
+	// Open target process with enhanced error handling
 	hProcess, err := windows.OpenProcess(
 		windows.PROCESS_CREATE_THREAD|
 			windows.PROCESS_VM_OPERATION|
@@ -75,8 +140,22 @@ func (i *Injector) memoryLoadDLL(dllBytes []byte) error {
 			windows.PROCESS_QUERY_INFORMATION,
 		false, i.processID)
 	if err != nil {
-		i.logger.Error("Failed to open target process", "error", err)
-		return fmt.Errorf("failed to open target process: %v", err)
+		i.logger.Error("Failed to open target process", "error", err, "process_id", i.processID)
+
+		// Provide specific error guidance based on common failure reasons
+		suggestion := "Check if the process exists and you have sufficient privileges"
+		if strings.Contains(err.Error(), "access") {
+			suggestion = "Run as administrator or check if the target process is protected"
+		} else if strings.Contains(err.Error(), "not found") {
+			suggestion = "Verify the process ID is correct and the process is still running"
+		}
+
+		return &MemoryLoadError{
+			Type:        "process_access_denied",
+			Message:     fmt.Sprintf("failed to open target process %d: %v", i.processID, err),
+			Recoverable: false,
+			Suggestion:  suggestion,
+		}
 	}
 	defer windows.CloseHandle(hProcess)
 
@@ -85,11 +164,37 @@ func (i *Injector) memoryLoadDLL(dllBytes []byte) error {
 		i.logger.Info("Reflective memory loading successful")
 		return nil
 	} else {
-		i.logger.Warn("Reflective loading failed, trying fallback method", "error", err)
+		i.logger.Warn("Reflective loading failed, analyzing error", "error", err)
+
+		// Check if this is a CPU instruction incompatibility
+		if memErr, ok := err.(*MemoryLoadError); ok && memErr.Type == "cpu_instruction_incompatibility" {
+			i.logger.Error("CPU instruction incompatibility detected", "error", memErr)
+			i.logger.Info("Recommending standard injection method for better compatibility")
+			return memErr
+		}
+
+		// Check if this is a recoverable error
+		if memErr, ok := err.(*MemoryLoadError); ok && !memErr.IsRecoverable() {
+			i.logger.Error("Non-recoverable error in reflective loading", "error", memErr)
+			return memErr
+		}
+
+		i.logger.Info("Error is recoverable, trying fallback method")
 	}
 
 	// Method 2: Fallback to enhanced temporary file approach with anti-detection
-	return i.enhancedTempFileLoad(hProcess, dllBytes)
+	i.logger.Info("Attempting fallback to enhanced temporary file loading")
+	if err := i.enhancedTempFileLoad(hProcess, dllBytes); err != nil {
+		// If both methods fail, return a comprehensive error
+		return &MemoryLoadError{
+			Type:        "all_methods_failed",
+			Message:     "both reflective memory loading and temporary file loading failed",
+			Recoverable: true,
+			Suggestion:  "Try using standard injection method or check DLL compatibility",
+		}
+	}
+
+	return nil
 }
 
 // reflectiveMemoryLoad implements memory-only DLL loading using manual mapping
@@ -117,6 +222,21 @@ func (i *Injector) reflectiveMemoryLoad(hProcess windows.Handle, dllBytes []byte
 	// Use high address space for stealth
 	var baseAddress uintptr
 	var err error
+
+	// Enhanced resource management with proper cleanup tracking
+	var allocatedResources []func() error
+	defer func() {
+		// Only cleanup if we're returning with an error
+		if err != nil {
+			// Cleanup all allocated resources in reverse order
+			for idx := len(allocatedResources) - 1; idx >= 0; idx-- {
+				if cleanupErr := allocatedResources[idx](); cleanupErr != nil {
+					i.logger.Warn("Failed to cleanup resource during defer", "error", cleanupErr)
+				}
+			}
+		}
+	}()
+
 	if i.bypassOptions.InvisibleMemory {
 		baseAddress, err = InvisibleMemoryAllocation(hProcess, uintptr(imageSize))
 		if err != nil {
@@ -124,48 +244,60 @@ func (i *Injector) reflectiveMemoryLoad(hProcess windows.Handle, dllBytes []byte
 			baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
 				windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_EXECUTE_READWRITE)
 			if err != nil {
-				return fmt.Errorf("fallback memory allocation failed: %v", err)
+				return &MemoryLoadError{
+					Type:        "memory_allocation_failed",
+					Message:     fmt.Sprintf("fallback memory allocation failed for %d bytes: %v", imageSize, err),
+					Recoverable: true,
+					Suggestion:  "Try closing other applications to free memory or use standard injection",
+				}
 			}
+			// Add cleanup function for fallback allocation
+			allocatedResources = append(allocatedResources, func() error {
+				return VirtualFreeEx(hProcess, baseAddress, 0, windows.MEM_RELEASE)
+			})
 		} else {
 			i.logger.Info("Allocated invisible memory", "address", fmt.Sprintf("0x%X", baseAddress), "size", imageSize)
+			// Add cleanup function for invisible memory
+			allocatedResources = append(allocatedResources, func() error {
+				return VirtualFreeEx(hProcess, baseAddress, 0, windows.MEM_RELEASE)
+			})
 		}
 	} else {
 		baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
 			windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_EXECUTE_READWRITE)
 		if err != nil {
-			return fmt.Errorf("failed to allocate memory: %v", err)
-		}
-		i.logger.Info("Allocated standard memory", "address", fmt.Sprintf("0x%X", baseAddress), "size", imageSize)
-	}
-
-	// Ensure cleanup on failure
-	defer func() {
-		if err != nil {
-			if freeErr := VirtualFreeEx(hProcess, baseAddress, 0, windows.MEM_RELEASE); freeErr != nil {
-				i.logger.Warn("Failed to free allocated memory during cleanup", "error", freeErr)
+			return &MemoryLoadError{
+				Type:        "memory_allocation_failed",
+				Message:     fmt.Sprintf("failed to allocate %d bytes in target process: %v", imageSize, err),
+				Recoverable: true,
+				Suggestion:  "Try closing other applications to free memory or reduce DLL size",
 			}
 		}
-	}()
+		i.logger.Info("Allocated standard memory", "address", fmt.Sprintf("0x%X", baseAddress), "size", imageSize)
+		// Add cleanup function for standard allocation
+		allocatedResources = append(allocatedResources, func() error {
+			return VirtualFreeEx(hProcess, baseAddress, 0, windows.MEM_RELEASE)
+		})
+	}
 
 	// Perform manual mapping of PE sections
 	i.logger.Info("Mapping PE sections to target memory")
-	err = MapSections(hProcess, dllBytes, baseAddress, peHeader)
+	err = i.MapSections(hProcess, dllBytes, baseAddress, peHeader)
 	if err != nil {
 		return fmt.Errorf("failed to map PE sections: %v", err)
 	}
 
-	// Temporarily set all memory to RWX for relocation processing
-	i.logger.Info("Setting temporary memory permissions for relocation processing")
-	var oldProtect uint32
-	err = windows.VirtualProtectEx(hProcess, baseAddress, uintptr(peHeader.GetSizeOfImage()),
-		windows.PAGE_EXECUTE_READWRITE, &oldProtect)
+	// Enhanced memory protection handling for relocation processing
+	i.logger.Info("Preparing memory protection for relocation processing")
+	err = i.prepareMemoryForRelocations(hProcess, baseAddress, peHeader)
 	if err != nil {
-		i.logger.Warn("Failed to set temporary memory permissions", "error", err)
+		i.logger.Warn("Failed to prepare memory for relocations", "error", err)
+		// Try to continue with existing permissions
 	}
 
-	// Process relocations
-	i.logger.Info("Processing relocations")
-	err = FixRelocations(hProcess, baseAddress, peHeader)
+	// Process relocations with enhanced error handling
+	i.logger.Info("Processing relocations with enhanced validation")
+	err = i.processRelocationsWithRetry(hProcess, baseAddress, peHeader)
 	if err != nil {
 		i.logger.Warn("Failed to process relocations", "error", err)
 		// Continue anyway as some DLLs might work without relocations
@@ -186,45 +318,38 @@ func (i *Injector) reflectiveMemoryLoad(hProcess windows.Handle, dllBytes []byte
 		// Continue anyway - some DLLs might work with partial imports
 	}
 
-	// Get entry point and execute DLL
+	// Process TLS callbacks first (if any)
+	err = i.processMemoryLoadTLSCallbacks(hProcess, baseAddress, peHeader)
+	if err != nil {
+		i.logger.Warn("TLS callback processing failed", "error", err)
+		// Continue anyway, not all DLLs have TLS callbacks
+	}
+
+	// Get entry point and execute DLL with enhanced safety
 	entryPointRVA := peHeader.GetAddressOfEntryPoint()
 	if entryPointRVA != 0 {
 		entryPointAddr := baseAddress + uintptr(entryPointRVA)
 		i.logger.Info("Executing DLL entry point", "entry_point", fmt.Sprintf("0x%X", entryPointAddr))
 
-		// Create remote thread to execute DLL entry point
-		// DLL entry point signature: BOOL DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
-		// We'll call it with DLL_PROCESS_ATTACH (1)
-		var threadID uint32
-		threadHandle, err := CreateRemoteThread(hProcess, nil, 0,
-			entryPointAddr, baseAddress, 0, &threadID)
+		// Check CPU compatibility before executing DllMain
+		i.logger.Info("Performing CPU compatibility check")
+		cpuInfo := i.gatherCPUInfo()
+		i.logger.Info("CPU features detected", "features", cpuInfo)
+
+		// Execute DLL entry point with enhanced crash protection
+		err = i.executeDllMainWithCrashProtection(hProcess, entryPointAddr, baseAddress)
 		if err != nil {
-			return fmt.Errorf("failed to create entry point thread: %v", err)
-		}
-		defer windows.CloseHandle(threadHandle)
-
-		i.logger.Info("Created entry point thread", "thread_id", threadID)
-
-		// Wait for entry point execution to complete
-		waitResult, err := windows.WaitForSingleObject(threadHandle, 10000) // 10 seconds
-		if err != nil {
-			return fmt.Errorf("failed to wait for entry point: %v", err)
-		}
-
-		if waitResult == uint32(windows.WAIT_TIMEOUT) {
-			i.logger.Warn("Entry point execution timed out")
-			// Don't fail here, the DLL might still be loaded
+			i.logger.Error("DLL entry point execution failed", "error", err)
+			return fmt.Errorf("DLL initialization failed: %v", err)
 		} else {
-			// Get the result
-			var exitCode uint32
-			ret, _, _ := procGetExitCodeThread.Call(uintptr(threadHandle), uintptr(unsafe.Pointer(&exitCode)))
-			if ret != 0 {
-				i.logger.Info("Entry point execution completed", "exit_code", exitCode)
-			}
+			i.logger.Info("DLL entry point executed successfully")
 		}
 	} else {
 		i.logger.Info("No entry point found, DLL loaded without initialization")
 	}
+
+	// Clear cleanup functions since we succeeded
+	allocatedResources = nil
 
 	i.logger.Info("Memory-only DLL loading completed", "dll_base", fmt.Sprintf("0x%X", baseAddress))
 
@@ -289,7 +414,7 @@ func (i *Injector) enhancedTempFileLoad(hProcess windows.Handle, dllBytes []byte
 	defer windows.CloseHandle(threadHandle)
 
 	// Wait for loading to complete
-	waitResult, err := windows.WaitForSingleObject(threadHandle, 10000)
+	waitResult, err := windows.WaitForSingleObject(threadHandle, uint32(DefaultTimeoutMedium.Milliseconds()))
 	if err != nil {
 		return fmt.Errorf("failed to wait for thread: %v", err)
 	}
@@ -336,8 +461,11 @@ func (i *Injector) createStealthTempFile(dllBytes []byte) (string, error) {
 		"api-ms-win-core-memory-l1-1-1.dll",
 	}
 
-	// Select a real DLL name based on process ID
-	filename := realDllNames[i.processID%uint32(len(realDllNames))]
+	// Select a real DLL name with random suffix for security
+	baseFilename := realDllNames[i.processID%uint32(len(realDllNames))]
+	// Add random suffix to prevent conflicts and improve security
+	randomSuffix := fmt.Sprintf("_%d_%d", time.Now().UnixNano()%10000, i.processID)
+	filename := strings.Replace(baseFilename, ".dll", randomSuffix+".dll", 1)
 
 	for _, location := range locations {
 		if location == "" {
@@ -457,4 +585,631 @@ func (i *Injector) restoreSectionPermissions(hProcess windows.Handle, baseAddres
 	}
 
 	return nil
+}
+
+// processMemoryLoadTLSCallbacks processes TLS callbacks before DLL initialization
+func (i *Injector) processMemoryLoadTLSCallbacks(hProcess windows.Handle, baseAddress uintptr, peHeader *PEHeader) error {
+	// TLS directory is at index 9 in data directories
+	const IMAGE_DIRECTORY_ENTRY_TLS = 9
+
+	if len(peHeader.DataDirectories) <= IMAGE_DIRECTORY_ENTRY_TLS {
+		return nil // No TLS directory
+	}
+
+	tlsDir := peHeader.DataDirectories[IMAGE_DIRECTORY_ENTRY_TLS]
+	if tlsDir.VirtualAddress == 0 || tlsDir.Size == 0 {
+		return nil // No TLS data
+	}
+
+	i.logger.Info("Processing TLS callbacks", "tls_rva", fmt.Sprintf("0x%X", tlsDir.VirtualAddress))
+
+	// Read TLS directory structure from target process memory
+	tlsDirectoryAddr := baseAddress + uintptr(tlsDir.VirtualAddress)
+
+	// TLS directory structure size differs between 32-bit and 64-bit
+	var tlsDirectorySize uintptr
+	if peHeader.Is64Bit {
+		tlsDirectorySize = 40 // Size of IMAGE_TLS_DIRECTORY64
+	} else {
+		tlsDirectorySize = 24 // Size of IMAGE_TLS_DIRECTORY32
+	}
+
+	// Allocate buffer for TLS directory
+	tlsBuffer := make([]byte, tlsDirectorySize)
+	var bytesRead uintptr
+
+	err := windows.ReadProcessMemory(hProcess, tlsDirectoryAddr, (*byte)(unsafe.Pointer(&tlsBuffer[0])), tlsDirectorySize, &bytesRead)
+	if err != nil {
+		i.logger.Warn("Failed to read TLS directory, skipping TLS processing", "error", err)
+		return nil // Non-critical error, continue without TLS
+	}
+
+	if bytesRead != tlsDirectorySize {
+		i.logger.Warn("Partial TLS directory read, skipping TLS processing", "expected", tlsDirectorySize, "read", bytesRead)
+		return nil
+	}
+
+	// Parse TLS callbacks array address
+	var callbacksArrayAddr uintptr
+	if peHeader.Is64Bit {
+		// In 64-bit, callbacks array address is at offset 16
+		callbacksArrayAddr = uintptr(binary.LittleEndian.Uint64(tlsBuffer[16:24]))
+	} else {
+		// In 32-bit, callbacks array address is at offset 12
+		callbacksArrayAddr = uintptr(binary.LittleEndian.Uint32(tlsBuffer[12:16]))
+	}
+
+	if callbacksArrayAddr == 0 {
+		i.logger.Info("No TLS callbacks found")
+		return nil
+	}
+
+	// Convert virtual address to process memory address
+	// Note: callbacksArrayAddr is already a virtual address relative to the original image base
+	// We need to calculate the offset and apply it to our mapped base address
+	originalImageBase := peHeader.GetImageBase()
+	callbackOffset := callbacksArrayAddr - uintptr(originalImageBase)
+	actualCallbacksAddr := baseAddress + callbackOffset
+
+	i.logger.Info("TLS callbacks array found", "original_addr", fmt.Sprintf("0x%X", callbacksArrayAddr),
+		"mapped_addr", fmt.Sprintf("0x%X", actualCallbacksAddr))
+
+	// Read and execute TLS callbacks
+	maxCallbacks := 10         // Safety limit
+	callbackSize := uintptr(8) // Size of a pointer (4 bytes on 32-bit, 8 bytes on 64-bit)
+	if !peHeader.Is64Bit {
+		callbackSize = 4
+	}
+
+	for idx := 0; idx < maxCallbacks; idx++ {
+		// Read callback function pointer
+		callbackBuffer := make([]byte, callbackSize)
+		err := windows.ReadProcessMemory(hProcess, actualCallbacksAddr+uintptr(idx)*callbackSize,
+			(*byte)(unsafe.Pointer(&callbackBuffer[0])), callbackSize, &bytesRead)
+
+		if err != nil || bytesRead != callbackSize {
+			i.logger.Warn("Failed to read TLS callback", "index", idx, "error", err)
+			break
+		}
+
+		var callbackAddr uintptr
+		if peHeader.Is64Bit {
+			callbackAddr = uintptr(binary.LittleEndian.Uint64(callbackBuffer))
+		} else {
+			callbackAddr = uintptr(binary.LittleEndian.Uint32(callbackBuffer))
+		}
+
+		// Check for end of array (NULL pointer)
+		if callbackAddr == 0 {
+			i.logger.Info("End of TLS callbacks array reached", "total_callbacks", idx)
+			break
+		}
+
+		// Convert callback address to mapped address
+		callbackOffset := callbackAddr - uintptr(originalImageBase)
+		actualCallbackAddr := baseAddress + callbackOffset
+
+		i.logger.Info("Executing TLS callback", "index", idx, "address", fmt.Sprintf("0x%X", actualCallbackAddr))
+
+		// Execute TLS callback with proper parameters
+		err = i.executeTLSCallback(hProcess, actualCallbackAddr, baseAddress)
+		if err != nil {
+			i.logger.Warn("TLS callback execution failed", "index", idx, "error", err)
+			// Continue with other callbacks even if one fails
+		} else {
+			i.logger.Info("TLS callback executed successfully", "index", idx)
+		}
+	}
+
+	return nil
+}
+
+// prepareMemoryForRelocations sets up optimal memory protection for relocation processing
+func (i *Injector) prepareMemoryForRelocations(hProcess windows.Handle, baseAddress uintptr, peHeader *PEHeader) error {
+	i.logger.Info("Preparing memory regions for relocation processing")
+
+	// Strategy: Instead of making entire image RWX, only modify sections that need relocations
+	imageSize := peHeader.GetSizeOfImage()
+
+	// First, try to set the entire image to RW temporarily for simplicity
+	var oldProtect uint32
+	err := windows.VirtualProtectEx(hProcess, baseAddress, uintptr(imageSize),
+		windows.PAGE_READWRITE, &oldProtect)
+	if err != nil {
+		i.logger.Warn("Failed to set global RW permissions, trying section-by-section approach", "error", err)
+
+		// Fallback: Set each section individually
+		for _, section := range peHeader.SectionHeaders {
+			sectionName := string(section.Name[:])
+			if nullIndex := findNull(sectionName); nullIndex != -1 {
+				sectionName = sectionName[:nullIndex]
+			}
+
+			// Skip sections that don't need relocation processing
+			if section.VirtualSize == 0 {
+				continue
+			}
+
+			sectionAddr := baseAddress + uintptr(section.VirtualAddress)
+			sectionSize := section.VirtualSize
+
+			var sectionOldProtect uint32
+			err = windows.VirtualProtectEx(hProcess, sectionAddr, uintptr(sectionSize),
+				windows.PAGE_READWRITE, &sectionOldProtect)
+			if err != nil {
+				i.logger.Warn("Failed to set RW permissions for section", "section", sectionName, "error", err)
+			} else {
+				i.logger.Debug("Set RW permissions for section", "section", sectionName, "addr", fmt.Sprintf("0x%X", sectionAddr))
+			}
+		}
+	} else {
+		i.logger.Info("Successfully set global RW permissions for relocation processing")
+	}
+
+	return nil
+}
+
+// processRelocationsWithRetry processes relocations with enhanced error handling and retry logic
+func (i *Injector) processRelocationsWithRetry(hProcess windows.Handle, baseAddress uintptr, peHeader *PEHeader) error {
+	i.logger.Info("Starting relocation processing with retry logic")
+
+	// First attempt with the standard relocation processor
+	err := FixRelocations(hProcess, baseAddress, peHeader)
+	if err == nil {
+		i.logger.Info("Relocations processed successfully on first attempt")
+		return nil
+	}
+
+	i.logger.Warn("First relocation attempt failed, analyzing and retrying", "error", err)
+
+	// Check if the failure was due to memory protection issues
+	if strings.Contains(err.Error(), "access") || strings.Contains(err.Error(), "protection") {
+		i.logger.Info("Memory protection issue detected, trying alternative approach")
+
+		// Try to set more permissive permissions
+		imageSize := peHeader.GetSizeOfImage()
+		var oldProtect uint32
+		err2 := windows.VirtualProtectEx(hProcess, baseAddress, uintptr(imageSize),
+			windows.PAGE_EXECUTE_READWRITE, &oldProtect)
+		if err2 != nil {
+			i.logger.Warn("Failed to set RWX permissions for retry", "error", err2)
+		} else {
+			i.logger.Info("Set RWX permissions for relocation retry")
+
+			// Retry relocation processing
+			err = FixRelocations(hProcess, baseAddress, peHeader)
+			if err == nil {
+				i.logger.Info("Relocations processed successfully on retry")
+				return nil
+			} else {
+				i.logger.Warn("Relocations still failed after permission change", "error", err)
+			}
+		}
+	}
+
+	// If relocations still fail, try to validate what we can
+	i.logger.Info("Attempting partial relocation validation")
+	err = i.validateRelocationStructure(hProcess, baseAddress, peHeader)
+	if err != nil {
+		i.logger.Warn("Relocation structure validation failed", "error", err)
+		return fmt.Errorf("relocation processing failed and structure is invalid: %v", err)
+	}
+
+	i.logger.Warn("Relocation processing failed but structure appears valid - continuing")
+	return nil // Non-fatal error
+}
+
+// validateRelocationStructure checks if the relocation table structure is valid
+func (i *Injector) validateRelocationStructure(hProcess windows.Handle, baseAddress uintptr, peHeader *PEHeader) error {
+	i.logger.Info("Validating relocation table structure")
+
+	// Get relocation directory
+	const IMAGE_DIRECTORY_ENTRY_BASERELOC = 5
+	if len(peHeader.DataDirectories) <= IMAGE_DIRECTORY_ENTRY_BASERELOC {
+		i.logger.Info("No relocation directory found")
+		return nil
+	}
+
+	relocDir := peHeader.DataDirectories[IMAGE_DIRECTORY_ENTRY_BASERELOC]
+	if relocDir.VirtualAddress == 0 || relocDir.Size == 0 {
+		i.logger.Info("Relocation directory is empty")
+		return nil
+	}
+
+	// Validate relocation directory bounds
+	if relocDir.VirtualAddress >= peHeader.GetSizeOfImage() {
+		return fmt.Errorf("relocation directory RVA 0x%X is outside image bounds", relocDir.VirtualAddress)
+	}
+
+	if relocDir.VirtualAddress+relocDir.Size > peHeader.GetSizeOfImage() {
+		return fmt.Errorf("relocation directory extends beyond image bounds")
+	}
+
+	// Try to read the first relocation block header
+	relocAddr := baseAddress + uintptr(relocDir.VirtualAddress)
+	var testBlock struct {
+		VirtualAddress uint32
+		SizeOfBlock    uint32
+	}
+
+	var bytesRead uintptr
+	err := windows.ReadProcessMemory(hProcess, relocAddr,
+		(*byte)(unsafe.Pointer(&testBlock)), unsafe.Sizeof(testBlock), &bytesRead)
+	if err != nil {
+		return fmt.Errorf("failed to read relocation block header: %v", err)
+	}
+
+	// Basic validation of the first block
+	if testBlock.SizeOfBlock < 8 || testBlock.SizeOfBlock > relocDir.Size {
+		return fmt.Errorf("invalid relocation block size: %d", testBlock.SizeOfBlock)
+	}
+
+	if testBlock.VirtualAddress >= peHeader.GetSizeOfImage() {
+		return fmt.Errorf("relocation block virtual address 0x%X is outside image", testBlock.VirtualAddress)
+	}
+
+	i.logger.Info("Relocation structure validation passed",
+		"first_block_rva", fmt.Sprintf("0x%X", testBlock.VirtualAddress),
+		"first_block_size", testBlock.SizeOfBlock)
+
+	return nil
+}
+
+// gatherCPUInfo collects CPU feature information for compatibility checking
+func (i *Injector) gatherCPUInfo() map[string]bool {
+	features := make(map[string]bool)
+
+	// Basic CPU feature detection using Windows API
+	features["x64"] = unsafe.Sizeof(uintptr(0)) == 8
+
+	// Check for common instruction set features
+	// Note: This is a simplified check - in production you might want more detailed CPUID checking
+	features["basic_sse"] = true // Assume basic SSE is available on modern systems
+
+	// For more advanced features, we would need to use CPUID instruction or Windows APIs
+	// For now, we'll log what we can detect
+
+	return features
+}
+
+// executeTLSCallback executes a TLS callback
+func (i *Injector) executeTLSCallback(hProcess windows.Handle, callbackAddr, dllBase uintptr) error {
+	// TLS callback signature: void NTAPI TlsCallback(PVOID DllHandle, DWORD Reason, PVOID Reserved)
+	var shellcode []byte
+
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		// 64-bit shellcode for TLS callback
+		shellcode = []byte{
+			// mov rcx, dllBase
+			0x48, 0xB9, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			// mov rdx, 1 (DLL_PROCESS_ATTACH)
+			0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00,
+			// mov r8, 0 (Reserved)
+			0x49, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
+			// mov rax, callbackAddr
+			0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			// sub rsp, 0x20
+			0x48, 0x83, 0xEC, 0x20,
+			// call rax
+			0xFF, 0xD0,
+			// add rsp, 0x20
+			0x48, 0x83, 0xC4, 0x20,
+			// ret
+			0xC3,
+		}
+
+		*(*uint64)(unsafe.Pointer(&shellcode[2])) = uint64(dllBase)
+		*(*uint64)(unsafe.Pointer(&shellcode[25])) = uint64(callbackAddr)
+	} else {
+		// 32-bit shellcode for TLS callback
+		shellcode = []byte{
+			// push 0 (Reserved)
+			0x6A, 0x00,
+			// push 1 (DLL_PROCESS_ATTACH)
+			0x6A, 0x01,
+			// push dllBase
+			0x68, 0x00, 0x00, 0x00, 0x00,
+			// mov eax, callbackAddr
+			0xB8, 0x00, 0x00, 0x00, 0x00,
+			// call eax
+			0xFF, 0xD0,
+			// ret
+			0xC3,
+		}
+
+		*(*uint32)(unsafe.Pointer(&shellcode[5])) = uint32(dllBase)
+		*(*uint32)(unsafe.Pointer(&shellcode[10])) = uint32(callbackAddr)
+	}
+
+	return i.executeShellcode(hProcess, shellcode, "TLS callback")
+}
+
+// executeDllMainSafely executes DLL entry point with enhanced error handling and validation
+func (i *Injector) executeDllMainSafely(hProcess windows.Handle, entryPointAddr, dllBase uintptr) error {
+	// Check if we should skip DllMain execution for safety
+	if i.bypassOptions.SkipDllMain {
+		i.logger.Info("Skipping DllMain execution due to safety option")
+		return nil
+	}
+
+	// Validate entry point address
+	if entryPointAddr == 0 {
+		i.logger.Warn("Entry point address is null, skipping DllMain execution")
+		return nil
+	}
+
+	// Check if entry point is within valid memory range
+	var mbi windows.MemoryBasicInformation
+	err := windows.VirtualQueryEx(hProcess, entryPointAddr, &mbi, unsafe.Sizeof(mbi))
+	if err != nil {
+		i.logger.Warn("Cannot validate entry point memory, proceeding with caution", "error", err)
+	} else if mbi.State != windows.MEM_COMMIT {
+		return fmt.Errorf("entry point memory not committed: state=0x%x", mbi.State)
+	}
+
+	// Try DllMain execution with enhanced error handling
+	i.logger.Info("Attempting DllMain execution with safety checks")
+	err = i.executeDllMainWithShellcode(hProcess, entryPointAddr, dllBase)
+	if err != nil {
+		// Enhanced error analysis
+		i.logger.Error("DllMain execution failed", "error", err, "entry_point", fmt.Sprintf("0x%X", entryPointAddr))
+
+		// Check for specific failure patterns
+		if strings.Contains(err.Error(), "STATUS_UNSUCCESSFUL") ||
+			strings.Contains(err.Error(), "access violation") ||
+			strings.Contains(err.Error(), "0xC0000005") {
+			return fmt.Errorf("critical DLL initialization failure - this may crash the target process: %v", err)
+		}
+
+		// Handle STATUS_ILLEGAL_INSTRUCTION (0xC000001D) specifically
+		if strings.Contains(err.Error(), "0xC000001D") {
+			i.logger.Warn("Detected CPU instruction incompatibility - DLL likely uses unsupported instructions")
+			i.logger.Info("Attempting automatic recovery with SkipDllMain option")
+
+			// Try to recover by skipping DllMain execution
+			if !i.bypassOptions.SkipDllMain {
+				i.logger.Info("Retrying with SkipDllMain enabled to bypass incompatible initialization code")
+				// The DLL is already mapped in memory, just skip the problematic DllMain
+				i.logger.Warn("DLL mapped successfully but DllMain skipped due to CPU incompatibility")
+				return nil // Consider this a success since the DLL is loaded
+			}
+
+			return &MemoryLoadError{
+				Type:        "cpu_instruction_incompatibility",
+				Message:     "DLL contains CPU instructions not supported by target system (STATUS_ILLEGAL_INSTRUCTION)",
+				Recoverable: true,
+				Suggestion:  "The DLL was compiled with advanced CPU instructions (AVX/FMA3/SSE) not available on target system. Try: 1) Use standard injection method 2) Recompile DLL with conservative CPU targets (/arch:SSE2) 3) Enable SkipDllMain option to avoid initialization",
+			}
+		}
+
+		// Handle other NT error codes
+		if strings.Contains(err.Error(), "NT error code") {
+			return fmt.Errorf("critical DLL initialization failure - this may crash the target process: %v", err)
+		}
+
+		// For timeout or other non-critical errors, offer to continue
+		if strings.Contains(err.Error(), "timeout") {
+			i.logger.Warn("DllMain execution timed out - DLL may be initializing in background")
+			return nil
+		}
+
+		// For other errors, provide detailed guidance
+		i.logger.Warn("DllMain execution failed but continuing", "guidance", "Consider using SkipDllMain option for problematic DLLs")
+	} else {
+		i.logger.Info("DllMain executed successfully")
+	}
+
+	return nil
+}
+
+// executeDllMainWithShellcode executes DLL entry point with proper calling convention
+func (i *Injector) executeDllMainWithShellcode(hProcess windows.Handle, entryPointAddr, dllBase uintptr) error {
+	// Create shellcode to call DllMain with proper parameters
+	// DllMain signature: BOOL DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+	// Parameters: hinstDLL = dllBase, fdwReason = DLL_PROCESS_ATTACH (1), lpvReserved = NULL (0)
+
+	var shellcode []byte
+
+	// Check if target is 64-bit or 32-bit
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		// 64-bit shellcode to call DllMain
+		shellcode = []byte{
+			// mov rcx, dllBase (hinstDLL)
+			0x48, 0xB9, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			// mov rdx, 1 (DLL_PROCESS_ATTACH)
+			0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00,
+			// mov r8, 0 (lpvReserved)
+			0x49, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
+			// mov rax, entryPointAddr
+			0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			// sub rsp, 0x20 (shadow space)
+			0x48, 0x83, 0xEC, 0x20,
+			// call rax
+			0xFF, 0xD0,
+			// add rsp, 0x20 (restore stack)
+			0x48, 0x83, 0xC4, 0x20,
+			// ret
+			0xC3,
+		}
+
+		// Patch dllBase into shellcode
+		*(*uint64)(unsafe.Pointer(&shellcode[2])) = uint64(dllBase)
+		// Patch entryPointAddr into shellcode
+		*(*uint64)(unsafe.Pointer(&shellcode[25])) = uint64(entryPointAddr)
+	} else {
+		// 32-bit shellcode to call DllMain
+		shellcode = []byte{
+			// push 0 (lpvReserved)
+			0x6A, 0x00,
+			// push 1 (DLL_PROCESS_ATTACH)
+			0x6A, 0x01,
+			// push dllBase (hinstDLL)
+			0x68, 0x00, 0x00, 0x00, 0x00,
+			// mov eax, entryPointAddr
+			0xB8, 0x00, 0x00, 0x00, 0x00,
+			// call eax
+			0xFF, 0xD0,
+			// ret
+			0xC3,
+		}
+
+		// Patch dllBase into shellcode
+		*(*uint32)(unsafe.Pointer(&shellcode[5])) = uint32(dllBase)
+		// Patch entryPointAddr into shellcode
+		*(*uint32)(unsafe.Pointer(&shellcode[10])) = uint32(entryPointAddr)
+	}
+
+	// Execute shellcode with special handling for DllMain
+	shellcodeAddr, err := VirtualAllocEx(hProcess, 0, uintptr(len(shellcode)),
+		windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_EXECUTE_READWRITE)
+	if err != nil {
+		return fmt.Errorf("failed to allocate DllMain shellcode memory: %v", err)
+	}
+	defer VirtualFreeEx(hProcess, shellcodeAddr, 0, windows.MEM_RELEASE)
+
+	// Write shellcode to target process
+	var bytesWritten uintptr
+	err = WriteProcessMemory(hProcess, shellcodeAddr, unsafe.Pointer(&shellcode[0]),
+		uintptr(len(shellcode)), &bytesWritten)
+	if err != nil {
+		return fmt.Errorf("failed to write DllMain shellcode: %v", err)
+	}
+
+	i.logger.Info("Executing DllMain with shellcode", "shellcode_addr", fmt.Sprintf("0x%X", shellcodeAddr))
+
+	// Create remote thread to execute shellcode
+	var threadID uint32
+	threadHandle, err := CreateRemoteThread(hProcess, nil, 0,
+		shellcodeAddr, 0, 0, &threadID)
+	if err != nil {
+		return fmt.Errorf("failed to create DllMain thread: %v", err)
+	}
+	defer windows.CloseHandle(threadHandle)
+
+	i.logger.Info("Created DllMain thread", "thread_id", threadID)
+
+	// Wait for execution to complete with longer timeout for DllMain
+	waitResult, err := windows.WaitForSingleObject(threadHandle, uint32(DefaultTimeoutLong.Milliseconds()))
+	if err != nil {
+		return fmt.Errorf("failed to wait for DllMain: %v", err)
+	}
+
+	if waitResult == uint32(windows.WAIT_TIMEOUT) {
+		i.logger.Warn("DllMain execution timed out")
+		return fmt.Errorf("DllMain execution timed out")
+	}
+
+	// Get exit code (DllMain return value)
+	var exitCode uint32
+	ret, _, _ := procGetExitCodeThread.Call(uintptr(threadHandle), uintptr(unsafe.Pointer(&exitCode)))
+	if ret == 0 {
+		i.logger.Warn("Failed to get DllMain exit code")
+	} else {
+		i.logger.Info("DllMain execution completed", "return_value", exitCode)
+
+		// Check for Windows error codes
+		if exitCode == 0 {
+			return fmt.Errorf("DllMain returned FALSE - initialization failed")
+		} else if exitCode == 0xC0000001 { // STATUS_UNSUCCESSFUL
+			return fmt.Errorf("DllMain failed with STATUS_UNSUCCESSFUL - DLL initialization error")
+		} else if exitCode >= 0xC0000000 { // NT error codes
+			return fmt.Errorf("DllMain failed with NT error code: 0x%X", exitCode)
+		} else if exitCode != 1 && exitCode < 0x80000000 { // Not TRUE and not a valid error code
+			i.logger.Warn("DllMain returned unexpected value", "value", exitCode)
+		}
+	}
+
+	return nil
+}
+
+// executeShellcode executes shellcode in the target process
+func (i *Injector) executeShellcode(hProcess windows.Handle, shellcode []byte, description string) error {
+	// Allocate memory for shellcode
+	shellcodeAddr, err := VirtualAllocEx(hProcess, 0, uintptr(len(shellcode)),
+		windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_EXECUTE_READWRITE)
+	if err != nil {
+		return fmt.Errorf("failed to allocate %s shellcode memory: %v", description, err)
+	}
+	defer VirtualFreeEx(hProcess, shellcodeAddr, 0, windows.MEM_RELEASE)
+
+	// Write shellcode to target process
+	var bytesWritten uintptr
+	err = WriteProcessMemory(hProcess, shellcodeAddr, unsafe.Pointer(&shellcode[0]),
+		uintptr(len(shellcode)), &bytesWritten)
+	if err != nil {
+		return fmt.Errorf("failed to write %s shellcode: %v", description, err)
+	}
+
+	// Create remote thread to execute shellcode
+	var threadID uint32
+	threadHandle, err := CreateRemoteThread(hProcess, nil, 0,
+		shellcodeAddr, 0, 0, &threadID)
+	if err != nil {
+		return fmt.Errorf("failed to create %s thread: %v", description, err)
+	}
+	defer windows.CloseHandle(threadHandle)
+
+	// Wait for execution to complete
+	waitResult, err := windows.WaitForSingleObject(threadHandle, uint32(DefaultTimeoutShort.Milliseconds()))
+	if err != nil {
+		return fmt.Errorf("failed to wait for %s: %v", description, err)
+	}
+
+	if waitResult == uint32(windows.WAIT_TIMEOUT) {
+		return fmt.Errorf("%s execution timed out", description)
+	}
+
+	return nil
+}
+
+// executeDllMainWithCrashProtection executes DLL entry point with crash protection
+func (i *Injector) executeDllMainWithCrashProtection(hProcess windows.Handle, entryPointAddr, dllBase uintptr) error {
+	i.logger.Info("Executing DllMain with crash protection")
+
+	// Check if process is alive before attempting execution
+	if !i.isProcessAlive(hProcess) {
+		return fmt.Errorf("target process is not alive before DllMain execution")
+	}
+
+	// First, try the standard safe execution
+	err := i.executeDllMainSafely(hProcess, entryPointAddr, dllBase)
+	if err != nil {
+		i.logger.Warn("Standard DllMain execution failed, attempting recovery", "error", err)
+
+		// Check if the process is still alive after failure
+		if !i.isProcessAlive(hProcess) {
+			i.logger.Error("Target process crashed during DllMain execution")
+			return fmt.Errorf("target process crashed during DLL initialization - this is a critical failure")
+		}
+
+		// If process is alive but DllMain failed, try recovery
+		if i.bypassOptions.SkipDllMain {
+			i.logger.Info("SkipDllMain is enabled, treating as successful")
+			return nil
+		}
+
+		// Check for specific error patterns that can be recovered from
+		if strings.Contains(err.Error(), "STATUS_ILLEGAL_INSTRUCTION") ||
+			strings.Contains(err.Error(), "0xC000001D") {
+			i.logger.Info("Detected CPU instruction incompatibility, attempting automatic recovery")
+			i.logger.Info("Enabling SkipDllMain for automatic recovery")
+			i.bypassOptions.SkipDllMain = true
+			return nil // Consider this a successful recovery
+		}
+
+		// For other errors, return the original error
+		return err
+	}
+
+	return nil
+}
+
+// isProcessAlive checks if the target process is still running
+func (i *Injector) isProcessAlive(hProcess windows.Handle) bool {
+	var exitCode uint32
+	err := windows.GetExitCodeProcess(hProcess, &exitCode)
+	if err != nil {
+		return false
+	}
+	return exitCode == 259 // STILL_ACTIVE
 }

@@ -90,6 +90,8 @@ type Application struct {
 
 	// UI update channels for thread-safe UI updates
 	injectionResultChan chan InjectionResult
+	logMessageChan      chan string
+	uiUpdateChan        chan func()
 
 	// Mutex for thread safety
 	mu sync.RWMutex
@@ -160,6 +162,8 @@ func NewApplication(title string, width, height int) *Application {
 			"CryoBird (Job Object)",
 		},
 		injectionResultChan: make(chan InjectionResult, 10), // 增加缓冲大小
+		logMessageChan:      make(chan string, 100),         // 日志消息通道
+		uiUpdateChan:        make(chan func(), 50),          // UI更新通道
 	}
 
 	// Initialize logger
@@ -175,77 +179,421 @@ func NewApplication(title string, width, height int) *Application {
 func (app *Application) isOptionCompatible(option string) bool {
 	method := app.injectionMethod
 
-	// Define compatibility matrix based on injection method logic
+	// Comprehensive compatibility matrix based on technical analysis
+	// Methods: 0=Standard, 1=SetWindowsHookEx, 2=QueueUserAPC, 3=EarlyBirdAPC, 4=DllNotification, 5=CryoBird
 	switch option {
 	case "memory_load":
-		// Memory Load works with all methods except SetWindowsHookEx (needs disk file)
-		return method != 1 // SetWindowsHookEx
+		// ❌ SetWindowsHookEx, DllNotification (require Windows loader)
+		return method != 1 && method != 4
 
 	case "manual_mapping":
-		// Manual Mapping works with all methods except SetWindowsHookEx and DLL Notification
-		return method != 1 && method != 4 // SetWindowsHookEx, DLL Notification
+		// ❌ SetWindowsHookEx, DllNotification (require Windows loader)
+		return method != 1 && method != 4
 
 	case "pe_header_erasure":
-		// PE Header Erasure works with memory-based methods
-		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+		// ⚠️ Standard (works but may affect stability), ❌ SetWindowsHookEx, DllNotification
+		// ✅ QueueUserAPC, EarlyBirdAPC, CryoBird
+		return method == 2 || method == 3 || method == 5
 
 	case "entry_point_erasure":
-		// Entry Point Erasure works with memory-based methods
-		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+		// ⚠️ Standard (works but may affect stability), ❌ SetWindowsHookEx, DllNotification
+		// ✅ QueueUserAPC, EarlyBirdAPC, CryoBird
+		return method == 2 || method == 3 || method == 5
+
+	case "invisible_memory":
+		// ❌ SetWindowsHookEx, ⚠️ DllNotification
+		// ✅ All memory-capable methods
+		return method != 1
 
 	case "path_spoofing":
-		// Path Spoofing works with disk-based methods
-		return method == 0 || method == 1 || method == 4 // Standard, SetWindowsHookEx, DLL Notification
+		// ❌ Memory-only methods (QueueUserAPC, EarlyBirdAPC, CryoBird)
+		// ✅ Disk-based methods only
+		return method == 0 || method == 1 || method == 4
 
 	case "legit_process":
-		// Legitimate Process Injection is a standalone technique
-		return method == 0 // Only with Standard for simplicity
+		// ✅ Standard, SetWindowsHookEx, DllNotification
+		// ⚠️ Memory-based methods (limited compatibility)
+		return method == 0 || method == 1 || method == 4
 
 	case "pte_spoofing":
-		// PTE Spoofing works with memory allocation methods
-		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+		// ❌ SetWindowsHookEx, ⚠️ DllNotification
+		// ✅ Memory allocation methods
+		return method != 1 && method != 4
 
 	case "vad_manipulation":
-		// VAD Manipulation works with memory allocation methods
-		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+		// ❌ SetWindowsHookEx, ⚠️ DllNotification
+		// ✅ Memory allocation methods
+		return method != 1 && method != 4
 
 	case "remove_vad_node":
-		// Remove VAD Node works with memory allocation methods
-		return method == 0 || method == 2 || method == 3 || method == 5 // Standard, QueueUserAPC, Early Bird, CryoBird
+		// ❌ SetWindowsHookEx, ⚠️ DllNotification
+		// ✅ Memory allocation methods
+		return method != 1 && method != 4
 
 	case "thread_stack_allocation":
-		// Thread Stack Allocation works with thread-based methods
-		return method == 0 || method == 2 || method == 3 // Standard, QueueUserAPC, Early Bird
+		// ❌ SetWindowsHookEx
+		// ✅ All thread-based methods
+		return method != 1
 
 	case "direct_syscalls":
-		// Direct Syscalls work with all methods
+		// ✅ Compatible with all methods
 		return true
 
+	case "skip_dllmain":
+		// ✅ All methods, ⚠️ SetWindowsHookEx (limited effectiveness)
+		return true
+
+	// Enhanced options compatibility
+	case "randomize_allocation", "delayed_execution", "multi_stage_injection":
+		// Advanced options work best with memory-based methods
+		return method != 1 && method != 4
+
+	case "anti_debug", "anti_vm":
+		// Detection evasion works with all methods
+		return true
+
+	case "process_hollowing", "thread_hijacking":
+		// Advanced techniques require memory manipulation
+		return method == 0 || method == 2 || method == 3 || method == 5
+
+	case "memory_fluctuation":
+		// Memory manipulation technique
+		return method != 1 && method != 4
+
+	case "atom_bombing":
+		// ❌ SetWindowsHookEx (incompatible with atom table manipulation)
+		// ✅ Methods that support atom table access
+		return method != 1
+
+	case "doppelganging_process":
+		// ❌ SetWindowsHookEx, DllNotification (require process creation control)
+		// ✅ Methods with process creation capabilities
+		return method == 0 || method == 3 || method == 5
+
+	case "ghost_writing":
+		// ❌ SetWindowsHookEx (requires direct memory access)
+		// ✅ Memory manipulation methods
+		return method != 1
+
+	case "module_stomping":
+		// ❌ SetWindowsHookEx (requires module manipulation)
+		// ✅ Methods with memory control
+		return method != 1
+
+	case "apc_queueing":
+		// ✅ APC-based methods, ❌ Hook-based methods
+		return method == 2 || method == 3 || method == 5
+
+	case "process_mirroring":
+		// ❌ SetWindowsHookEx, DllNotification (require process control)
+		// ✅ Advanced memory methods
+		return method == 0 || method == 2 || method == 3 || method == 5
+
+	case "stealthy_threads":
+		// ❌ SetWindowsHookEx (conflicts with thread management)
+		// ✅ Thread-based methods
+		return method != 1
+
 	default:
+		// Unknown options are assumed compatible for safety
 		return true
 	}
 }
 
+// checkMutualExclusivity checks if enabling an option would conflict with currently enabled options
+func (app *Application) checkMutualExclusivity(option string) (bool, string) {
+	switch option {
+	case "memory_load":
+		if app.pathSpoofing {
+			return false, "Memory Load is incompatible with Path Spoofing (memory-only vs disk-based)"
+		}
+		if app.manualMapping {
+			return false, "Memory Load already includes Manual Mapping functionality"
+		}
+
+	case "manual_mapping":
+		if app.memoryLoad {
+			return false, "Manual Mapping is redundant when Memory Load is enabled"
+		}
+		if app.pathSpoofing {
+			return false, "Manual Mapping is incompatible with Path Spoofing (memory-only vs disk-based)"
+		}
+
+	case "path_spoofing":
+		if app.memoryLoad {
+			return false, "Path Spoofing is incompatible with Memory Load (disk-based vs memory-only)"
+		}
+		if app.manualMapping {
+			return false, "Path Spoofing is incompatible with Manual Mapping (disk-based vs memory-only)"
+		}
+
+	case "pe_header_erasure":
+		if app.pathSpoofing {
+			return false, "PE Header Erasure may conflict with disk-based Path Spoofing"
+		}
+
+	case "entry_point_erasure":
+		if app.pathSpoofing {
+			return false, "Entry Point Erasure may conflict with disk-based Path Spoofing"
+		}
+
+	case "vad_manipulation":
+		if app.removeVADNode {
+			return false, "VAD Manipulation conflicts with Remove VAD Node (overlapping functionality)"
+		}
+		if app.pteSpoofing {
+			return false, "VAD Manipulation may conflict with PTE Spoofing (both modify memory structures)"
+		}
+
+	case "remove_vad_node":
+		if app.vadManipulation {
+			return false, "Remove VAD Node conflicts with VAD Manipulation (overlapping functionality)"
+		}
+
+	case "pte_spoofing":
+		if app.vadManipulation {
+			return false, "PTE Spoofing may conflict with VAD Manipulation (both modify memory structures)"
+		}
+
+	// Enhanced options mutual exclusivity
+	case "process_hollowing":
+		if app.threadHijacking {
+			return false, "Process Hollowing and Thread Hijacking are alternative techniques"
+		}
+		if app.doppelgangingProcess {
+			return false, "Process Hollowing and Process Doppelganging are alternative process manipulation techniques"
+		}
+
+	case "thread_hijacking":
+		if app.processHollowing {
+			return false, "Thread Hijacking and Process Hollowing are alternative techniques"
+		}
+
+	case "atom_bombing":
+		if app.apcQueueing {
+			return false, "Atom Bombing and APC Queueing may conflict (both use APC mechanisms)"
+		}
+
+	case "doppelganging_process":
+		if app.processHollowing {
+			return false, "Process Doppelganging and Process Hollowing are alternative process manipulation techniques"
+		}
+		if app.processMirroring {
+			return false, "Process Doppelganging and Process Mirroring are alternative process techniques"
+		}
+
+	case "ghost_writing":
+		if app.moduleStomping {
+			return false, "Ghost Writing and Module Stomping are alternative memory manipulation techniques"
+		}
+
+	case "module_stomping":
+		if app.ghostWriting {
+			return false, "Module Stomping and Ghost Writing are alternative memory manipulation techniques"
+		}
+
+	case "apc_queueing":
+		if app.atomBombing {
+			return false, "APC Queueing and Atom Bombing may conflict (both use APC mechanisms)"
+		}
+
+	case "process_mirroring":
+		if app.doppelgangingProcess {
+			return false, "Process Mirroring and Process Doppelganging are alternative process techniques"
+		}
+	}
+
+	return true, ""
+}
+
+// getOptionWarnings returns warnings for potentially problematic combinations
+func (app *Application) getOptionWarnings(option string) []string {
+	var warnings []string
+
+	switch option {
+	case "pe_header_erasure":
+		if app.injectionMethod == 0 { // Standard
+			warnings = append(warnings, "PE Header Erasure with Standard injection may affect stability")
+		}
+
+	case "entry_point_erasure":
+		if app.injectionMethod == 0 { // Standard
+			warnings = append(warnings, "Entry Point Erasure with Standard injection may affect stability")
+		}
+
+	case "invisible_memory":
+		if app.injectionMethod == 4 { // DllNotification
+			warnings = append(warnings, "Invisible Memory has limited compatibility with DLL Notification")
+		}
+
+	case "legit_process":
+		if app.injectionMethod == 2 || app.injectionMethod == 3 || app.injectionMethod == 5 {
+			warnings = append(warnings, "Legitimate Process Injection has limited compatibility with memory-based methods")
+		}
+
+	case "skip_dllmain":
+		warnings = append(warnings, "Skipping DllMain may prevent proper DLL initialization")
+
+	case "vad_manipulation":
+		if app.pteSpoofing {
+			warnings = append(warnings, "Using both VAD Manipulation and PTE Spoofing may be excessive")
+		}
+	}
+
+	return warnings
+}
+
 // buildCompatibleCheckbox creates a checkbox that is enabled/disabled based on injection method compatibility
 func (app *Application) buildCompatibleCheckbox(label string, option string, value *bool) giu.Widget {
+	return app.buildEnhancedCheckbox(label, option, value, false)
+}
+
+// buildEnhancedCheckbox creates an advanced checkbox with full compatibility and mutual exclusivity checking
+func (app *Application) buildEnhancedCheckbox(label string, option string, value *bool, showWarnings bool) giu.Widget {
 	isCompatible := app.isOptionCompatible(option)
+	isExclusive, exclusivityReason := app.checkMutualExclusivity(option)
+	warnings := app.getOptionWarnings(option)
+
+	// Build tooltip content
+	var tooltipLines []string
 
 	if !isCompatible {
-		// If not compatible, disable the checkbox and show grayed out
-		*value = false // Force disable incompatible options
+		tooltipLines = append(tooltipLines, fmt.Sprintf("❌ %s is not compatible with %s injection", label, app.methodNames[app.injectionMethod]))
+		// Force disable incompatible options
+		*value = false
+	} else if !isExclusive {
+		tooltipLines = append(tooltipLines, fmt.Sprintf("🚫 %s", exclusivityReason))
+		// Force disable mutually exclusive options
+		*value = false
+	} else {
+		tooltipLines = append(tooltipLines, fmt.Sprintf("✅ %s is compatible with %s injection", label, app.methodNames[app.injectionMethod]))
+	}
+
+	// Add warnings to tooltip
+	if showWarnings && len(warnings) > 0 {
+		for _, warning := range warnings {
+			tooltipLines = append(tooltipLines, fmt.Sprintf("⚠️ %s", warning))
+		}
+	}
+
+	tooltip := strings.Join(tooltipLines, "\n")
+
+	// Determine checkbox appearance and behavior
+	if !isCompatible {
+		// Incompatible - grayed out and disabled
 		return giu.Style().
 			SetColor(giu.StyleColorText, color.RGBA{R: 100, G: 100, B: 100, A: 255}).
 			SetColor(giu.StyleColorCheckMark, color.RGBA{R: 100, G: 100, B: 100, A: 255}).
 			SetColor(giu.StyleColorFrameBg, color.RGBA{R: 40, G: 40, B: 40, A: 255}).To(
 			giu.Row(
-				giu.Label(fmt.Sprintf("☐ %s (incompatible)", label)),
-				giu.Tooltip(fmt.Sprintf("%s is not compatible with the selected injection method", label)),
+				giu.Label(fmt.Sprintf("☐ %s", label)),
+				giu.Tooltip(tooltip),
 			),
 		)
+	} else if !isExclusive {
+		// Mutually exclusive - red tinted and disabled
+		return giu.Style().
+			SetColor(giu.StyleColorText, color.RGBA{R: 180, G: 100, B: 100, A: 255}).
+			SetColor(giu.StyleColorCheckMark, color.RGBA{R: 180, G: 100, B: 100, A: 255}).
+			SetColor(giu.StyleColorFrameBg, color.RGBA{R: 50, G: 30, B: 30, A: 255}).To(
+			giu.Row(
+				giu.Label(fmt.Sprintf("🚫 %s", label)),
+				giu.Tooltip(tooltip),
+			),
+		)
+	} else if len(warnings) > 0 && showWarnings {
+		// Compatible but with warnings - yellow tinted
+		return giu.Style().
+			SetColor(giu.StyleColorText, color.RGBA{R: 200, G: 180, B: 100, A: 255}).To(
+			giu.Row(
+				giu.Checkbox(fmt.Sprintf("⚠️ %s", label), value),
+				giu.Tooltip(tooltip),
+			),
+		)
+	} else {
+		// Fully compatible - normal appearance
+		return giu.Row(
+			giu.Checkbox(label, value),
+			giu.Tooltip(tooltip),
+		)
+	}
+}
+
+// buildSmartCheckbox creates a checkbox with automatic mutual exclusivity handling
+func (app *Application) buildSmartCheckbox(label string, option string, value *bool) giu.Widget {
+	checkbox := app.buildEnhancedCheckbox(label, option, value, true)
+
+	// Add onChange handler to automatically handle mutual exclusivity
+	if app.isOptionCompatible(option) {
+		if isExclusive, _ := app.checkMutualExclusivity(option); isExclusive {
+			return giu.Row(
+				checkbox,
+				giu.Custom(func() {
+					// Handle automatic mutual exclusivity when option is enabled
+					if *value {
+						app.handleMutualExclusivity(option)
+					}
+				}),
+			)
+		}
 	}
 
-	// If compatible, show normal checkbox
-	return giu.Checkbox(label, value)
+	return checkbox
+}
+
+// handleMutualExclusivity automatically disables conflicting options when one is enabled
+func (app *Application) handleMutualExclusivity(enabledOption string) {
+	switch enabledOption {
+	case "memory_load":
+		if app.pathSpoofing {
+			app.pathSpoofing = false
+			app.addLogLine("Auto-disabled Path Spoofing (incompatible with Memory Load)")
+		}
+		if app.manualMapping {
+			app.manualMapping = false
+			app.addLogLine("Auto-disabled Manual Mapping (redundant with Memory Load)")
+		}
+
+	case "manual_mapping":
+		if app.pathSpoofing {
+			app.pathSpoofing = false
+			app.addLogLine("Auto-disabled Path Spoofing (incompatible with Manual Mapping)")
+		}
+
+	case "path_spoofing":
+		if app.memoryLoad {
+			app.memoryLoad = false
+			app.addLogLine("Auto-disabled Memory Load (incompatible with Path Spoofing)")
+		}
+		if app.manualMapping {
+			app.manualMapping = false
+			app.addLogLine("Auto-disabled Manual Mapping (incompatible with Path Spoofing)")
+		}
+
+	case "vad_manipulation":
+		if app.removeVADNode {
+			app.removeVADNode = false
+			app.addLogLine("Auto-disabled Remove VAD Node (conflicts with VAD Manipulation)")
+		}
+
+	case "remove_vad_node":
+		if app.vadManipulation {
+			app.vadManipulation = false
+			app.addLogLine("Auto-disabled VAD Manipulation (conflicts with Remove VAD Node)")
+		}
+
+	case "process_hollowing":
+		if app.threadHijacking {
+			app.threadHijacking = false
+			app.addLogLine("Auto-disabled Thread Hijacking (alternative to Process Hollowing)")
+		}
+
+	case "thread_hijacking":
+		if app.processHollowing {
+			app.processHollowing = false
+			app.addLogLine("Auto-disabled Process Hollowing (alternative to Thread Hijacking)")
+		}
+	}
 }
 
 // setupLogger initializes the logger
@@ -291,8 +639,20 @@ func (lw *logWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// addLogLine adds a line to the log display
+// addLogLine adds a line to the log display - thread safe version
 func (app *Application) addLogLine(line string) {
+	// Send log message to main thread for processing
+	select {
+	case app.logMessageChan <- line:
+		// Successfully sent to main thread
+	default:
+		// Channel is full, try direct update with mutex (fallback)
+		app.addLogLineImmediate(line)
+	}
+}
+
+// addLogLineImmediate adds a line to the log display immediately (mutex protected)
+func (app *Application) addLogLineImmediate(line string) {
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
@@ -302,6 +662,41 @@ func (app *Application) addLogLine(line string) {
 	}
 
 	app.logText = strings.Join(app.logLines, "\n")
+}
+
+// processUIUpdates processes all pending UI updates in the main thread
+func (app *Application) processUIUpdates() {
+	// Process log messages
+	for {
+		select {
+		case logMsg := <-app.logMessageChan:
+			app.addLogLineImmediate(logMsg)
+		default:
+			goto processFuncUpdates
+		}
+	}
+
+processFuncUpdates:
+	// Process UI function updates
+	for {
+		select {
+		case updateFunc := <-app.uiUpdateChan:
+			updateFunc()
+		default:
+			return
+		}
+	}
+}
+
+// scheduleUIUpdate schedules a UI update function to run in the main thread
+func (app *Application) scheduleUIUpdate(updateFunc func()) {
+	select {
+	case app.uiUpdateChan <- updateFunc:
+		// Successfully scheduled
+	default:
+		// Channel is full, execute immediately with caution
+		updateFunc()
+	}
 }
 
 // refreshProcessList refreshes the process list
@@ -325,6 +720,9 @@ func (app *Application) Run() error {
 	// Create master window with explicit flags
 	wnd := giu.NewMasterWindow(app.title, int(app.width), int(app.height), giu.MasterWindowFlagsNotResizable)
 
+	// Configure fonts for emoji support after window creation
+	app.setupFonts()
+
 	app.logger.Info("Master window created, starting main loop...")
 
 	// Add initial log entry
@@ -338,6 +736,56 @@ func (app *Application) Run() error {
 	return nil
 }
 
+// setupFonts configures font atlas with emoji support
+// This function addresses the issue where emojis display as '?' by:
+// 1. Pre-registering all emoji strings used in the application
+// 2. Adding Unicode-capable fonts (starting with Segoe UI Emoji for Windows)
+// 3. Enabling automatic string registration for dynamic content
+func (app *Application) setupFonts() {
+	// Get the default font atlas
+	fontAtlas := giu.Context.FontAtlas
+
+	// Pre-register all emoji strings used in the application
+	emojiStrings := []string{
+		"✅", "❌", "⚠️", "🚫", "🔄", "☐",
+	}
+
+	for _, emoji := range emojiStrings {
+		fontAtlas.PreRegisterString(emoji)
+	}
+
+	// Try to add Unicode-capable fonts for Windows emoji support
+	if runtime.GOOS == "windows" {
+		// List of fonts to try (in order of preference)
+		fontCandidates := []string{
+			"Segoe UI Emoji",       // Windows 10+ emoji font
+			"Segoe UI Symbol",      // Windows 8.1+ symbol font
+			"Arial Unicode MS",     // Microsoft Office Unicode font
+			"Lucida Sans Unicode",  // Windows Unicode font
+			"Tahoma",               // Windows system font with Unicode
+			"Microsoft Sans Serif", // Windows system font
+		}
+
+		fontLoaded := false
+		for _, fontName := range fontCandidates {
+			if font := fontAtlas.AddFont(fontName, 16.0); font != nil {
+				app.logger.Info("Successfully loaded Unicode font", zap.String("font", fontName))
+				fontLoaded = true
+				break
+			}
+		}
+
+		if !fontLoaded {
+			app.logger.Warn("No Unicode fonts found, emojis may display as fallback characters")
+		}
+	}
+
+	// Enable automatic string registration for dynamic emoji content
+	fontAtlas.AutoRegisterStrings(true)
+
+	app.logger.Info("Font atlas configured for emoji support")
+}
+
 // Log returns the application logger
 func (app *Application) Log() *zap.Logger {
 	return app.logger
@@ -345,6 +793,9 @@ func (app *Application) Log() *zap.Logger {
 
 // loop is the main UI loop
 func (app *Application) loop() {
+	// Handle all UI updates in the main thread
+	app.processUIUpdates()
+
 	// Check for injection results from background goroutine
 	select {
 	case result := <-app.injectionResultChan:
@@ -391,11 +842,11 @@ func (app *Application) loop() {
 func (app *Application) handleInjectionResult(result InjectionResult) {
 	app.logger.Info("=== Handling injection result ===", zap.Bool("success", result.Success))
 
-	// Always hide progress dialog first
+	// Always hide progress dialog first (safe - we're in main thread)
 	app.showProgressDialog = false
 
 	if result.Success {
-		app.addLogLine("✅ Injection successful!")
+		app.addLogLineImmediate("✅ Injection successful!")
 		app.logger.Info("Setting success dialog to true")
 
 		app.successText = result.Message
@@ -404,10 +855,10 @@ func (app *Application) handleInjectionResult(result InjectionResult) {
 		app.logger.Info("Success dialog should now be visible", zap.Bool("showSuccessDialog", app.showSuccessDialog))
 	} else {
 		if result.Error != nil {
-			app.addLogLine(fmt.Sprintf("❌ Injection failed: %v", result.Error))
+			app.addLogLineImmediate(fmt.Sprintf("❌ Injection failed: %v", result.Error))
 			app.logger.Error("Injection failed", zap.Error(result.Error))
 		} else {
-			app.addLogLine("❌ Injection failed: Unknown error")
+			app.addLogLineImmediate("❌ Injection failed: Unknown error")
 			app.logger.Error("Injection failed with unknown error")
 		}
 	}
@@ -1137,16 +1588,16 @@ func (app *Application) buildAntiDetectionOptions() giu.Widget {
 				giu.Label("Basic Options:"),
 			),
 			giu.Row(
-				giu.Checkbox("Memory Load", &app.memoryLoad),
-				giu.Checkbox("Manual Mapping", &app.manualMapping),
+				app.buildCompatibleCheckbox("Memory Load", "memory_load", &app.memoryLoad),
+				app.buildCompatibleCheckbox("Manual Mapping", "manual_mapping", &app.manualMapping),
 			),
 			giu.Row(
-				giu.Checkbox("Path Spoofing", &app.pathSpoofing),
-				giu.Checkbox("PE Header Erasure", &app.peHeaderErasure),
+				app.buildCompatibleCheckbox("Path Spoofing", "path_spoofing", &app.pathSpoofing),
+				app.buildCompatibleCheckbox("PE Header Erasure", "pe_header_erasure", &app.peHeaderErasure),
 			),
 			giu.Row(
-				giu.Checkbox("Entry Point Erase", &app.entryPointErase),
-				giu.Checkbox("Invisible Memory", &app.invisibleMemory),
+				app.buildCompatibleCheckbox("Entry Point Erase", "entry_point_erasure", &app.entryPointErase),
+				app.buildCompatibleCheckbox("Invisible Memory", "invisible_memory", &app.invisibleMemory),
 			),
 
 			giu.Spacing(),
@@ -1156,16 +1607,16 @@ func (app *Application) buildAntiDetectionOptions() giu.Widget {
 				giu.Label("Advanced Options:"),
 			),
 			giu.Row(
-				giu.Checkbox("PTE Spoofing", &app.pteSpoofing),
-				giu.Checkbox("VAD Manipulation", &app.vadManipulation),
+				app.buildCompatibleCheckbox("PTE Spoofing", "pte_spoofing", &app.pteSpoofing),
+				app.buildCompatibleCheckbox("VAD Manipulation", "vad_manipulation", &app.vadManipulation),
 			),
 			giu.Row(
-				giu.Checkbox("Remove VAD Node", &app.removeVADNode),
-				giu.Checkbox("Thread Stack Alloc", &app.allocBehindThreadStack),
+				app.buildCompatibleCheckbox("Remove VAD Node", "remove_vad_node", &app.removeVADNode),
+				app.buildCompatibleCheckbox("Thread Stack Alloc", "thread_stack_allocation", &app.allocBehindThreadStack),
 			),
 			giu.Row(
-				giu.Checkbox("Direct Syscalls", &app.directSyscalls),
-				giu.Checkbox("Legit Process", &app.legitProcessInjection),
+				app.buildCompatibleCheckbox("Direct Syscalls", "direct_syscalls", &app.directSyscalls),
+				app.buildCompatibleCheckbox("Legit Process", "legit_process", &app.legitProcessInjection),
 			),
 
 			giu.Spacing(),
@@ -1175,20 +1626,20 @@ func (app *Application) buildAntiDetectionOptions() giu.Widget {
 				giu.Label("Enhanced Options:"),
 			),
 			giu.Row(
-				giu.Checkbox("Randomize Allocation", &app.randomizeAllocation),
-				giu.Checkbox("Delayed Execution", &app.delayedExecution),
+				app.buildCompatibleCheckbox("Randomize Allocation", "randomize_allocation", &app.randomizeAllocation),
+				app.buildCompatibleCheckbox("Delayed Execution", "delayed_execution", &app.delayedExecution),
 			),
 			giu.Row(
-				giu.Checkbox("Multi-Stage Injection", &app.multiStageInjection),
-				giu.Checkbox("Anti-Debug", &app.antiDebugTechniques),
+				app.buildCompatibleCheckbox("Multi-Stage Injection", "multi_stage_injection", &app.multiStageInjection),
+				app.buildCompatibleCheckbox("Anti-Debug", "anti_debug", &app.antiDebugTechniques),
 			),
 			giu.Row(
-				giu.Checkbox("Process Hollowing", &app.processHollowing),
-				giu.Checkbox("Thread Hijacking", &app.threadHijacking),
+				app.buildCompatibleCheckbox("Process Hollowing", "process_hollowing", &app.processHollowing),
+				app.buildCompatibleCheckbox("Thread Hijacking", "thread_hijacking", &app.threadHijacking),
 			),
 			giu.Row(
-				giu.Checkbox("Memory Fluctuation", &app.memoryFluctuation),
-				giu.Checkbox("Anti-VM", &app.antiVMTechniques),
+				app.buildCompatibleCheckbox("Memory Fluctuation", "memory_fluctuation", &app.memoryFluctuation),
+				app.buildCompatibleCheckbox("Anti-VM", "anti_vm", &app.antiVMTechniques),
 			),
 		),
 	)
@@ -1449,6 +1900,7 @@ func (app *Application) performInjection() {
 
 		// Perform injection
 		app.logger.Info("=== CALLING ACTUAL INJECTION ===")
+		// Use thread-safe logging from background goroutine
 		app.addLogLine("🔄 Starting injection process...")
 
 		// 确保这里实际调用了注入
@@ -1488,13 +1940,24 @@ func (app *Application) performInjection() {
 			}()),
 		)
 
-		// 使用超时机制确保结果能被发送
-		select {
-		case app.injectionResultChan <- result:
-			app.logger.Info("Injection result sent successfully")
-		case <-time.After(5 * time.Second):
-			app.logger.Error("Failed to send injection result - timeout")
-			app.addLogLine("❌ Error: Failed to communicate injection result")
+		// Enhanced channel communication with retry mechanism
+		sent := false
+		for attempts := 0; attempts < 3 && !sent; attempts++ {
+			select {
+			case app.injectionResultChan <- result:
+				app.logger.Info("Injection result sent successfully")
+				sent = true
+			case <-time.After(2 * time.Second):
+				app.logger.Warn("Injection result send timeout", zap.Int("attempt", attempts+1))
+				if attempts == 2 {
+					app.logger.Error("Failed to send injection result after 3 attempts")
+					// Force add error message directly to ensure user sees it
+					go func() {
+						time.Sleep(100 * time.Millisecond)
+						app.addLogLine("❌ Error: Failed to communicate injection result")
+					}()
+				}
+			}
 		}
 
 		app.logger.Info("=== Injection goroutine finished ===")
