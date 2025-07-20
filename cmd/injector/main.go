@@ -7,8 +7,8 @@ import (
 )
 
 func main() {
-	// Create UI app first so we can use its logger - 使用与截图匹配的窗口尺寸
-	app := ui.NewApplication("DLL Injector", 1024, 650)
+	// Create UI app first so we can use its logger - 优化后的窗口尺寸
+	app := ui.NewApplication("DLL Injector", 1005, 650)
 
 	// Log startup using app's logger (will show in UI)
 	logger := app.Log()

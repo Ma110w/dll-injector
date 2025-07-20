@@ -40,6 +40,10 @@ type Application struct {
 	logLines            []string
 	maxLogLines         int
 
+	// Emoji fallback support
+	useEmojiText bool
+	emojiMap     map[string]string
+
 	// Injection options
 	injectionMethod int32
 	methodNames     []string
@@ -164,6 +168,18 @@ func NewApplication(title string, width, height int) *Application {
 		injectionResultChan: make(chan InjectionResult, 10), // 增加缓冲大小
 		logMessageChan:      make(chan string, 100),         // 日志消息通道
 		uiUpdateChan:        make(chan func(), 50),          // UI更新通道
+
+		// Initialize emoji fallback
+		useEmojiText: false, // Will be set to true if emoji fonts fail to load
+		emojiMap: map[string]string{
+			"✅":  "[OK]",
+			"❌":  "[ERROR]",
+			"⚠️": "[WARN]",
+			"🚫":  "[BLOCKED]",
+			"🔄":  "[REFRESH]",
+			"☐":  "[ ]",
+			"🛡️": "[SHIELD]",
+		},
 	}
 
 	// Initialize logger
@@ -458,21 +474,21 @@ func (app *Application) buildEnhancedCheckbox(label string, option string, value
 	var tooltipLines []string
 
 	if !isCompatible {
-		tooltipLines = append(tooltipLines, fmt.Sprintf("❌ %s is not compatible with %s injection", label, app.methodNames[app.injectionMethod]))
+		tooltipLines = append(tooltipLines, fmt.Sprintf("%s %s is not compatible with %s injection", app.getEmojiText("❌"), label, app.methodNames[app.injectionMethod]))
 		// Force disable incompatible options
 		*value = false
 	} else if !isExclusive {
-		tooltipLines = append(tooltipLines, fmt.Sprintf("🚫 %s", exclusivityReason))
+		tooltipLines = append(tooltipLines, fmt.Sprintf("%s %s", app.getEmojiText("🚫"), exclusivityReason))
 		// Force disable mutually exclusive options
 		*value = false
 	} else {
-		tooltipLines = append(tooltipLines, fmt.Sprintf("✅ %s is compatible with %s injection", label, app.methodNames[app.injectionMethod]))
+		tooltipLines = append(tooltipLines, fmt.Sprintf("%s %s is compatible with %s injection", app.getEmojiText("✅"), label, app.methodNames[app.injectionMethod]))
 	}
 
 	// Add warnings to tooltip
 	if showWarnings && len(warnings) > 0 {
 		for _, warning := range warnings {
-			tooltipLines = append(tooltipLines, fmt.Sprintf("⚠️ %s", warning))
+			tooltipLines = append(tooltipLines, fmt.Sprintf("%s %s", app.getEmojiText("⚠️"), warning))
 		}
 	}
 
@@ -486,7 +502,7 @@ func (app *Application) buildEnhancedCheckbox(label string, option string, value
 			SetColor(giu.StyleColorCheckMark, color.RGBA{R: 100, G: 100, B: 100, A: 255}).
 			SetColor(giu.StyleColorFrameBg, color.RGBA{R: 40, G: 40, B: 40, A: 255}).To(
 			giu.Row(
-				giu.Label(fmt.Sprintf("☐ %s", label)),
+				giu.Label(fmt.Sprintf("%s %s", app.getEmojiText("☐"), label)),
 				giu.Tooltip(tooltip),
 			),
 		)
@@ -497,7 +513,7 @@ func (app *Application) buildEnhancedCheckbox(label string, option string, value
 			SetColor(giu.StyleColorCheckMark, color.RGBA{R: 180, G: 100, B: 100, A: 255}).
 			SetColor(giu.StyleColorFrameBg, color.RGBA{R: 50, G: 30, B: 30, A: 255}).To(
 			giu.Row(
-				giu.Label(fmt.Sprintf("🚫 %s", label)),
+				giu.Label(fmt.Sprintf("%s %s", app.getEmojiText("🚫"), label)),
 				giu.Tooltip(tooltip),
 			),
 		)
@@ -506,7 +522,7 @@ func (app *Application) buildEnhancedCheckbox(label string, option string, value
 		return giu.Style().
 			SetColor(giu.StyleColorText, color.RGBA{R: 200, G: 180, B: 100, A: 255}).To(
 			giu.Row(
-				giu.Checkbox(fmt.Sprintf("⚠️ %s", label), value),
+				giu.Checkbox(fmt.Sprintf("%s %s", app.getEmojiText("⚠️"), label), value),
 				giu.Tooltip(tooltip),
 			),
 		)
@@ -736,26 +752,93 @@ func (app *Application) Run() error {
 	return nil
 }
 
-// setupFonts configures font atlas with emoji support
-// This function addresses the issue where emojis display as '?' by:
-// 1. Pre-registering all emoji strings used in the application
-// 2. Adding Unicode-capable fonts (starting with Segoe UI Emoji for Windows)
-// 3. Enabling automatic string registration for dynamic content
+// setupFonts configures font atlas with custom fonts and emoji support
+// This function:
+// 1. Loads SourceHanSansSC-Regular.ttf for Chinese text display
+// 2. Registers all emoji strings used in the application
+// 3. Adds Unicode-capable fonts for emoji support
+// 4. Uses fallback approach with text replacement if fonts fail
 func (app *Application) setupFonts() {
+	app.logger.Info("Setting up fonts with SourceHanSansSC support...")
+
 	// Get the default font atlas
 	fontAtlas := giu.Context.FontAtlas
+	if fontAtlas == nil {
+		app.logger.Error("FontAtlas is nil, cannot configure font support")
+		return
+	}
 
-	// Pre-register all emoji strings used in the application
+	// Try to load SourceHanSansSC-Regular.ttf as the default font
+	fontLoaded := false
+	fontPaths := []string{
+		"fonts/SourceHanSansSC-Regular.ttf",
+		"./fonts/SourceHanSansSC-Regular.ttf",
+		"../fonts/SourceHanSansSC-Regular.ttf",
+		"SourceHanSansSC-Regular.ttf",
+	}
+
+	for _, fontPath := range fontPaths {
+		app.logger.Debug("Trying to load SourceHanSansSC font", zap.String("path", fontPath))
+		if _, err := os.Stat(fontPath); err == nil {
+			// Read font file
+			fontBytes, err := os.ReadFile(fontPath)
+			if err != nil {
+				app.logger.Debug("Failed to read font file", zap.String("path", fontPath), zap.Error(err))
+				continue
+			}
+
+			// Set SourceHanSansSC as the default font
+			fontAtlas.SetDefaultFontFromBytes(fontBytes, 16.0)
+			app.logger.Info("Successfully set SourceHanSansSC as default font", zap.String("path", fontPath))
+			fontLoaded = true
+			break
+		} else {
+			app.logger.Debug("Font file not found", zap.String("path", fontPath))
+		}
+	}
+
+	if !fontLoaded {
+		app.logger.Warn("SourceHanSansSC font not found, trying system fonts for Chinese support")
+
+		// Try to load system fonts that support Chinese
+		if runtime.GOOS == "windows" {
+			chineseFonts := []string{
+				"Microsoft YaHei", // Windows Vista+ Chinese font
+				"SimSun",          // Traditional Windows Chinese font
+				"SimHei",          // Windows Chinese font
+				"KaiTi",           // Windows Chinese font
+				"FangSong",        // Windows Chinese font
+			}
+
+			for _, fontName := range chineseFonts {
+				app.logger.Debug("Trying to set Chinese system font as default", zap.String("font", fontName))
+				fontAtlas.SetDefaultFont(fontName, 16.0)
+				app.logger.Info("Successfully set Chinese system font as default", zap.String("font", fontName))
+				fontLoaded = true
+				break
+			}
+		}
+
+		if !fontLoaded {
+			app.logger.Info("No Chinese fonts found, using default font (Chinese characters may not display correctly)")
+		}
+	}
+
+	// Register all emoji strings used in the application
 	emojiStrings := []string{
-		"✅", "❌", "⚠️", "🚫", "🔄", "☐",
+		"✅", "❌", "⚠️", "🚫", "🔄", "☐", "🛡️",
 	}
 
+	app.logger.Info("Registering emoji strings", zap.Int("count", len(emojiStrings)))
 	for _, emoji := range emojiStrings {
-		fontAtlas.PreRegisterString(emoji)
+		fontAtlas.RegisterString(emoji)
+		app.logger.Debug("Registered emoji", zap.String("emoji", emoji))
 	}
 
-	// Try to add Unicode-capable fonts for Windows emoji support
+	// Try to add additional Unicode-capable fonts for emoji support
+	emojiFont := false
 	if runtime.GOOS == "windows" {
+		app.logger.Info("Attempting to load Windows Unicode fonts for emoji support...")
 		// List of fonts to try (in order of preference)
 		fontCandidates := []string{
 			"Segoe UI Emoji",       // Windows 10+ emoji font
@@ -766,24 +849,46 @@ func (app *Application) setupFonts() {
 			"Microsoft Sans Serif", // Windows system font
 		}
 
-		fontLoaded := false
 		for _, fontName := range fontCandidates {
+			app.logger.Debug("Trying to load emoji font", zap.String("font", fontName))
 			if font := fontAtlas.AddFont(fontName, 16.0); font != nil {
-				app.logger.Info("Successfully loaded Unicode font", zap.String("font", fontName))
-				fontLoaded = true
+				app.logger.Info("Successfully loaded emoji font", zap.String("font", fontName))
+				emojiFont = true
 				break
+			} else {
+				app.logger.Debug("Failed to load emoji font", zap.String("font", fontName))
 			}
-		}
-
-		if !fontLoaded {
-			app.logger.Warn("No Unicode fonts found, emojis may display as fallback characters")
 		}
 	}
 
-	// Enable automatic string registration for dynamic emoji content
-	fontAtlas.AutoRegisterStrings(true)
+	// Determine if we need text fallback for emojis
+	if !fontLoaded && !emojiFont {
+		app.logger.Warn("No Unicode fonts found, enabling text fallback for emojis")
+		app.useEmojiText = true
+	} else if !emojiFont {
+		app.logger.Info("Using SourceHanSansSC for emoji display (may have limited emoji support)")
+		app.useEmojiText = false
+	} else {
+		app.logger.Info("Emoji fonts loaded successfully")
+		app.useEmojiText = false
+	}
 
-	app.logger.Info("Font atlas configured for emoji support")
+	app.logger.Info("Font configuration completed",
+		zap.Bool("sourceHanSansLoaded", fontLoaded),
+		zap.Bool("emojiFontLoaded", emojiFont),
+		zap.Bool("useTextFallback", app.useEmojiText))
+}
+
+// getEmojiText returns the appropriate text for emoji display
+// If emoji fonts are loaded, returns the original emoji
+// If not, returns a text fallback
+func (app *Application) getEmojiText(emoji string) string {
+	if app.useEmojiText {
+		if fallback, exists := app.emojiMap[emoji]; exists {
+			return fallback
+		}
+	}
+	return emoji
 }
 
 // Log returns the application logger
@@ -846,7 +951,7 @@ func (app *Application) handleInjectionResult(result InjectionResult) {
 	app.showProgressDialog = false
 
 	if result.Success {
-		app.addLogLineImmediate("✅ Injection successful!")
+		app.addLogLineImmediate(fmt.Sprintf("%s Injection successful!", app.getEmojiText("✅")))
 		app.logger.Info("Setting success dialog to true")
 
 		app.successText = result.Message
@@ -855,10 +960,10 @@ func (app *Application) handleInjectionResult(result InjectionResult) {
 		app.logger.Info("Success dialog should now be visible", zap.Bool("showSuccessDialog", app.showSuccessDialog))
 	} else {
 		if result.Error != nil {
-			app.addLogLineImmediate(fmt.Sprintf("❌ Injection failed: %v", result.Error))
+			app.addLogLineImmediate(fmt.Sprintf("%s Injection failed: %v", app.getEmojiText("❌"), result.Error))
 			app.logger.Error("Injection failed", zap.Error(result.Error))
 		} else {
-			app.addLogLineImmediate("❌ Injection failed: Unknown error")
+			app.addLogLineImmediate(fmt.Sprintf("%s Injection failed: Unknown error", app.getEmojiText("❌")))
 			app.logger.Error("Injection failed with unknown error")
 		}
 	}
@@ -879,7 +984,7 @@ func (app *Application) buildTopRow() giu.Widget {
 			),
 			giu.Row(
 				giu.Style().SetColor(giu.StyleColorFrameBg, color.RGBA{R: 50, G: 50, B: 50, A: 255}).To(
-					giu.InputText(&app.selectedDllPath).Hint("Select DLL file path...").Size(400),
+					giu.InputText(&app.selectedDllPath).Hint("Select DLL file path...").Size(380),
 				),
 				giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
 					giu.Button("Browse").Size(80, 0).OnClick(func() {
@@ -920,30 +1025,38 @@ func (app *Application) buildInjectionMethodSection() giu.Widget {
 			giu.Label("Injection Method:"),
 		),
 		giu.Spacing(),
-		// Single row with all 6 radio buttons
+		// First row with 3 radio buttons
 		giu.Row(
 			giu.Style().SetColor(giu.StyleColorCheckMark, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
-				giu.RadioButton("Standard Injection", app.injectionMethod == 0).OnChange(func() {
+				giu.RadioButton("Standard", app.injectionMethod == 0).OnChange(func() {
 					app.injectionMethod = 0
 					app.addLogLine("Injection method selected: Standard Injection")
 				}),
 			),
+			giu.Dummy(15, 0), // Reduced spacing
 			giu.RadioButton("SetWindowsHookEx", app.injectionMethod == 1).OnChange(func() {
 				app.injectionMethod = 1
 				app.addLogLine("Injection method selected: SetWindowsHookEx")
 			}),
+			giu.Dummy(15, 0), // Reduced spacing
 			giu.RadioButton("QueueUserAPC", app.injectionMethod == 2).OnChange(func() {
 				app.injectionMethod = 2
 				app.addLogLine("Injection method selected: QueueUserAPC")
 			}),
-			giu.RadioButton("Early Bird", app.injectionMethod == 3).OnChange(func() {
+		),
+		giu.Spacing(),
+		// Second row with 3 radio buttons
+		giu.Row(
+			giu.RadioButton("Early Bird APC", app.injectionMethod == 3).OnChange(func() {
 				app.injectionMethod = 3
-				app.addLogLine("Injection method selected: Early Bird")
+				app.addLogLine("Injection method selected: Early Bird APC")
 			}),
+			giu.Dummy(15, 0), // Reduced spacing
 			giu.RadioButton("DLL Notification", app.injectionMethod == 4).OnChange(func() {
 				app.injectionMethod = 4
 				app.addLogLine("Injection method selected: DLL Notification")
 			}),
+			giu.Dummy(15, 0), // Reduced spacing
 			giu.RadioButton("CryoBird", app.injectionMethod == 5).OnChange(func() {
 				app.injectionMethod = 5
 				app.addLogLine("Injection method selected: CryoBird (Job Object)")
@@ -963,25 +1076,25 @@ func (app *Application) buildAntiDetectionSection() giu.Widget {
 		),
 		giu.Spacing(),
 
-		// Tab buttons - exactly like screenshot
+		// Tab buttons - optimized for compact layout
 		giu.Row(
 			// Basic tab (active/blue)
 			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 0, G: 122, B: 204, A: 255}).To(
 				giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 255, G: 255, B: 255, A: 255}).To(
-					giu.Button("Basic").Size(60, 25).OnClick(func() {
+					giu.Button("Basic").Size(100, 30).OnClick(func() {
 						app.selectedTab = 0
 					}),
 				),
 			),
 			// Advanced tab (inactive/gray)
 			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
-				giu.Button("Advanced").Size(80, 25).OnClick(func() {
+				giu.Button("Advanced").Size(120, 30).OnClick(func() {
 					app.selectedTab = 1
 				}),
 			),
 			// Preset tab (inactive/gray)
 			giu.Style().SetColor(giu.StyleColorButton, color.RGBA{R: 80, G: 80, B: 80, A: 255}).To(
-				giu.Button("Preset").Size(60, 25).OnClick(func() {
+				giu.Button("Preset").Size(100, 30).OnClick(func() {
 					app.selectedTab = 2
 				}),
 			),
@@ -1003,11 +1116,11 @@ func (app *Application) buildTabContent() giu.Widget {
 				giu.Column(
 					app.buildCompatibleCheckbox("Memory Load", "memory_load", &app.memoryLoad),
 				),
-				giu.Dummy(120, 0), // Spacer
+				giu.Dummy(80, 0), // Reduced spacer
 				giu.Column(
 					app.buildCompatibleCheckbox("Manual Mapping", "manual_mapping", &app.manualMapping),
 				),
-				giu.Dummy(120, 0), // Spacer
+				giu.Dummy(80, 0), // Reduced spacer
 				giu.Column(
 					app.buildCompatibleCheckbox("Erase PE Header", "pe_header_erasure", &app.peHeaderErasure),
 				),
@@ -1018,11 +1131,11 @@ func (app *Application) buildTabContent() giu.Widget {
 				giu.Column(
 					app.buildCompatibleCheckbox("Path Spoofing", "path_spoofing", &app.pathSpoofing),
 				),
-				giu.Dummy(120, 0), // Spacer
+				giu.Dummy(80, 0), // Reduced spacer
 				giu.Column(
 					app.buildCompatibleCheckbox("Legitimate Process", "legit_process", &app.legitProcessInjection),
 				),
-				giu.Dummy(120, 0), // Spacer
+				giu.Dummy(80, 0), // Reduced spacer
 				giu.Column(
 					app.buildCompatibleCheckbox("Erase Entry Point", "entry_point_erasure", &app.entryPointErase),
 				),
@@ -1034,11 +1147,11 @@ func (app *Application) buildTabContent() giu.Widget {
 				giu.Column(
 					app.buildCompatibleCheckbox("PTE Spoofing", "pte_spoofing", &app.pteSpoofing),
 				),
-				giu.Dummy(120, 0),
+				giu.Dummy(80, 0), // Reduced spacer
 				giu.Column(
 					app.buildCompatibleCheckbox("VAD Manipulation", "vad_manipulation", &app.vadManipulation),
 				),
-				giu.Dummy(120, 0),
+				giu.Dummy(80, 0), // Reduced spacer
 				giu.Column(
 					app.buildCompatibleCheckbox("Remove VAD Node", "remove_vad_node", &app.removeVADNode),
 				),
@@ -1048,11 +1161,11 @@ func (app *Application) buildTabContent() giu.Widget {
 				giu.Column(
 					app.buildCompatibleCheckbox("Thread Stack Alloc", "thread_stack_allocation", &app.allocBehindThreadStack),
 				),
-				giu.Dummy(120, 0),
+				giu.Dummy(80, 0), // Reduced spacer
 				giu.Column(
 					app.buildCompatibleCheckbox("Direct Syscalls", "direct_syscalls", &app.directSyscalls),
 				),
-				giu.Dummy(120, 0),
+				giu.Dummy(80, 0), // Reduced spacer
 				giu.Column(
 					giu.Checkbox("Process Hollowing", &app.processHollowing),
 				),
@@ -1061,14 +1174,15 @@ func (app *Application) buildTabContent() giu.Widget {
 	case 2: // Preset
 		return giu.Column(
 			giu.Row(
-				giu.Button("Stealth Mode").Size(120, 30).OnClick(func() {
+				giu.Button("Stealth Mode").Size(140, 30).OnClick(func() {
 					app.memoryLoad = true
 					app.manualMapping = true
 					app.peHeaderErasure = true
 					app.pathSpoofing = true
 					app.addLogLine("Stealth mode preset applied")
 				}),
-				giu.Button("Maximum Evasion").Size(120, 30).OnClick(func() {
+				giu.Dummy(10, 0), // Add spacing between buttons
+				giu.Button("Maximum Evasion").Size(140, 30).OnClick(func() {
 					app.memoryLoad = true
 					app.manualMapping = true
 					app.peHeaderErasure = true
@@ -1078,7 +1192,8 @@ func (app *Application) buildTabContent() giu.Widget {
 					app.directSyscalls = true
 					app.addLogLine("Maximum evasion preset applied")
 				}),
-				giu.Button("Clear All").Size(120, 30).OnClick(func() {
+				giu.Dummy(10, 0), // Add spacing between buttons
+				giu.Button("Clear All").Size(100, 30).OnClick(func() {
 					app.clearAllOptions()
 					app.addLogLine("All options cleared")
 				}),
@@ -1158,7 +1273,7 @@ func (app *Application) buildProcessSelectionDialog() {
 
 	giu.Window("Select Target Process").
 		IsOpen(&app.showProcessDialog).
-		Size(900, 500).
+		Size(880, 500).
 		Flags(giu.WindowFlagsNoResize | giu.WindowFlagsNoCollapse).
 		Layout(
 			giu.Column(
@@ -1174,7 +1289,7 @@ func (app *Application) buildProcessSelectionDialog() {
 					giu.Style().SetColor(giu.StyleColorText, color.RGBA{R: 170, G: 170, B: 170, A: 255}).To(
 						giu.Label("Search:"),
 					),
-					giu.InputText(&app.processSearchText).Hint("Type process name, PID, or path...").Size(400),
+					giu.InputText(&app.processSearchText).Hint("Type process name, PID, or path...").Size(380),
 					giu.Button("Refresh List").OnClick(func() {
 						app.refreshProcessList()
 						app.addLogLine("Process list refreshed")
@@ -1272,7 +1387,7 @@ func (app *Application) buildProcessListContent() giu.Widget {
 					app.selectedProcessName = proc.Name
 					app.showProcessDialog = false
 					app.processSearchText = ""
-					app.addLogLine(fmt.Sprintf("✅ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+					app.addLogLine(fmt.Sprintf("%s Process selected: %s (PID: %d)", app.getEmojiText("✅"), proc.Name, proc.PID))
 				}),
 			)
 		} else {
@@ -1287,7 +1402,7 @@ func (app *Application) buildProcessListContent() giu.Widget {
 					app.selectedProcessName = proc.Name
 					app.showProcessDialog = false
 					app.processSearchText = ""
-					app.addLogLine(fmt.Sprintf("✅ Process selected: %s (PID: %d)", proc.Name, proc.PID))
+					app.addLogLine(fmt.Sprintf("%s Process selected: %s (PID: %d)", app.getEmojiText("✅"), proc.Name, proc.PID))
 				}),
 			)
 		}
@@ -1786,20 +1901,20 @@ func (app *Application) buildDialogs() {
 // onInjectClicked handles the inject button click
 func (app *Application) onInjectClicked() {
 	if app.selectedDllPath == "" {
-		app.addLogLine("❌ Error: No DLL file selected")
+		app.addLogLine(fmt.Sprintf("%s Error: No DLL file selected", app.getEmojiText("❌")))
 		app.logger.Error("No DLL file selected")
 		return
 	}
 
 	if app.selectedPID <= 0 {
-		app.addLogLine("❌ Error: No target process selected")
+		app.addLogLine(fmt.Sprintf("%s Error: No target process selected", app.getEmojiText("❌")))
 		app.logger.Error("No target process selected")
 		return
 	}
 
 	// Validate DLL file exists
 	if _, err := os.Stat(app.selectedDllPath); os.IsNotExist(err) {
-		app.addLogLine(fmt.Sprintf("❌ Error: DLL file does not exist: %s", app.selectedDllPath))
+		app.addLogLine(fmt.Sprintf("%s Error: DLL file does not exist: %s", app.getEmojiText("❌"), app.selectedDllPath))
 		app.logger.Error("DLL file does not exist", zap.String("path", app.selectedDllPath))
 		return
 	}
