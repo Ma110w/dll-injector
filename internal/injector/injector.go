@@ -578,6 +578,15 @@ func (i *Injector) standardInject() error {
 	}
 	i.logger.Info("Successfully allocated memory", "address", fmt.Sprintf("0x%X", memAddr))
 
+	// Ensure memory is freed on error
+	defer func() {
+		if memAddr != 0 && err != nil {
+			// Free memory on error
+			VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
+			i.logger.Debug("Freed allocated memory due to error", "address", fmt.Sprintf("0x%X", memAddr))
+		}
+	}()
+
 	// Write DLL path to target process
 	var bytesWritten uintptr
 	err = WriteProcessMemory(hProcess, memAddr, unsafe.Pointer(&dllPathBytes[0]),
@@ -964,7 +973,15 @@ func (i *Injector) queueUserAPCInject() error {
 		i.logger.Error("Failed to allocate memory", "error", err)
 		return fmt.Errorf("failed to allocate memory: %v", err)
 	}
-	defer VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
+
+	// Ensure memory is freed in all cases
+	success := false
+	defer func() {
+		if !success && memAddr != 0 {
+			VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
+			i.logger.Debug("Freed allocated memory", "address", fmt.Sprintf("0x%X", memAddr))
+		}
+	}()
 
 	var bytesWritten uintptr
 	err = WriteProcessMemory(hProcess, memAddr, unsafe.Pointer(&dllPathBytes[0]),
@@ -1111,7 +1128,14 @@ func (i *Injector) earlyBirdAPCInject() error {
 		i.logger.Error("Failed to allocate memory", "error", err)
 		return fmt.Errorf("failed to allocate memory: %v", err)
 	}
-	defer VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
+
+	// Ensure memory is freed properly
+	defer func() {
+		if memAddr != 0 {
+			VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
+			i.logger.Debug("Freed allocated memory", "address", fmt.Sprintf("0x%X", memAddr))
+		}
+	}()
 
 	var bytesWritten uintptr
 	err = WriteProcessMemory(hProcess, memAddr, unsafe.Pointer(&dllPathBytes[0]),
@@ -1322,7 +1346,14 @@ func (i *Injector) cryoBirdInject() error {
 		i.logger.Error("Failed to allocate memory", "error", err)
 		return fmt.Errorf("failed to allocate memory: %v", err)
 	}
-	defer VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
+
+	// Ensure memory is freed properly
+	defer func() {
+		if memAddr != 0 {
+			VirtualFreeEx(hProcess, memAddr, 0, windows.MEM_RELEASE)
+			i.logger.Debug("Freed allocated memory", "address", fmt.Sprintf("0x%X", memAddr))
+		}
+	}()
 
 	// Write DLL path
 	var bytesWritten uintptr

@@ -12,7 +12,7 @@ import (
 
 // ErasePEHeader implements advanced PE header erasure with multiple techniques
 func ErasePEHeader(processHandle windows.Handle, baseAddress uintptr) error {
-	Printf("Starting advanced PE header erasure\n")
+	Debug("Starting advanced PE header erasure")
 
 	// Phase 1: Read and analyze current PE header
 	peInfo, err := analyzeRemotePEHeader(processHandle, baseAddress)
@@ -20,7 +20,7 @@ func ErasePEHeader(processHandle windows.Handle, baseAddress uintptr) error {
 		return fmt.Errorf("failed to analyze PE header: %v", err)
 	}
 
-	Printf("PE header analysis complete - Size: %d bytes, Entry: 0x%X\n", peInfo.HeaderSize, peInfo.EntryPoint)
+	Debug("PE header analysis complete", "size", peInfo.HeaderSize, "entry", fmt.Sprintf("0x%X", peInfo.EntryPoint))
 
 	// Phase 2: Selective erasure to avoid breaking functionality
 	if err := performSelectivePEErasure(processHandle, baseAddress, peInfo); err != nil {
@@ -29,15 +29,15 @@ func ErasePEHeader(processHandle windows.Handle, baseAddress uintptr) error {
 
 	// Phase 3: Pattern-based obfuscation
 	if err := obfuscatePESignatures(processHandle, baseAddress, peInfo); err != nil {
-		Printf("Warning: PE signature obfuscation failed: %v\n", err)
+		Warn("PE signature obfuscation failed", "error", err)
 	}
 
 	// Phase 4: Timestamp and checksum manipulation
 	if err := manipulatePEMetadata(processHandle, baseAddress, peInfo); err != nil {
-		Printf("Warning: PE metadata manipulation failed: %v\n", err)
+		Warn("PE metadata manipulation failed", "error", err)
 	}
 
-	Printf("Advanced PE header erasure completed\n")
+	Debug("Advanced PE header erasure completed")
 	return nil
 }
 
@@ -129,26 +129,26 @@ func analyzeRemotePEHeader(processHandle windows.Handle, baseAddress uintptr) (*
 
 // performSelectivePEErasure performs selective erasure to preserve functionality
 func performSelectivePEErasure(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
-	Printf("Performing selective PE erasure\n")
+	Debug("Performing selective PE erasure")
 
 	// Strategy 1: Erase DOS stub (safe to erase)
 	if err := eraseDOSStub(processHandle, baseAddress); err != nil {
-		Printf("Warning: DOS stub erasure failed: %v\n", err)
+		Warn("DOS stub erasure failed", "error", err)
 	}
 
 	// Strategy 2: Selectively modify PE signature
 	if err := modifyPESignature(processHandle, baseAddress, info); err != nil {
-		Printf("Warning: PE signature modification failed: %v\n", err)
+		Warn("PE signature modification failed", "error", err)
 	}
 
 	// Strategy 3: Erase unused header space
 	if err := eraseUnusedHeaderSpace(processHandle, baseAddress, info); err != nil {
-		Printf("Warning: Unused header space erasure failed: %v\n", err)
+		Warn("Unused header space erasure failed", "error", err)
 	}
 
 	// Strategy 4: Erase section table selectively (very careful)
 	if err := eraseSectionTableSelectively(processHandle, baseAddress, info); err != nil {
-		Printf("Warning: Section table erasure failed: %v\n", err)
+		Warn("Section table erasure failed", "error", err)
 	}
 
 	return nil
@@ -174,7 +174,7 @@ func eraseDOSStub(processHandle windows.Handle, baseAddress uintptr) error {
 		return fmt.Errorf("failed to erase DOS stub: %v", err)
 	}
 
-	Printf("DOS stub erased: %d bytes\n", bytesWritten)
+	Debug("DOS stub erased", "bytes", bytesWritten)
 	return nil
 }
 
@@ -192,7 +192,7 @@ func modifyPESignature(processHandle windows.Handle, baseAddress uintptr, info *
 		return fmt.Errorf("failed to modify PE signature: %v", err)
 	}
 
-	Printf("PE signature modified\n")
+	Debug("PE signature modified")
 	return nil
 }
 
@@ -217,7 +217,7 @@ func eraseUnusedHeaderSpace(processHandle windows.Handle, baseAddress uintptr, i
 			if err != nil {
 				return fmt.Errorf("failed to erase unused header space: %v", err)
 			}
-			Printf("Unused header space erased: %d bytes\n", bytesWritten)
+			Debug("Unused header space erased", "bytes", bytesWritten)
 		}
 	}
 
@@ -238,7 +238,7 @@ func eraseSectionTableSelectively(processHandle windows.Handle, baseAddress uint
 		var bytesWritten uintptr
 		err := WriteProcessMemory(processHandle, sectionHeaderAddr, unsafe.Pointer(&sectionNameObfuscated[0]), 8, &bytesWritten)
 		if err != nil {
-			Printf("Warning: Failed to erase section %d name: %v\n", i, err)
+			Warn("Failed to erase section name", "section", i, "error", err)
 		}
 	}
 
@@ -247,16 +247,16 @@ func eraseSectionTableSelectively(processHandle windows.Handle, baseAddress uint
 
 // obfuscatePESignatures obfuscates common PE analysis signatures
 func obfuscatePESignatures(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
-	Printf("Obfuscating PE signatures\n")
+	Debug("Obfuscating PE signatures")
 
 	// Obfuscate rich header if present
 	if err := obfuscateRichHeader(processHandle, baseAddress); err != nil {
-		Printf("Rich header obfuscation failed: %v\n", err)
+		Warn("Rich header obfuscation failed", "error", err)
 	}
 
 	// Obfuscate debug directory
 	if err := obfuscateDebugDirectory(processHandle, baseAddress, info); err != nil {
-		Printf("Debug directory obfuscation failed: %v\n", err)
+		Warn("Debug directory obfuscation failed", "error", err)
 	}
 
 	return nil
@@ -287,7 +287,7 @@ func obfuscateRichHeader(processHandle windows.Handle, baseAddress uintptr) erro
 			if err != nil {
 				return err
 			}
-			Printf("Rich header signature obfuscated at offset 0x%X\n", addr-baseAddress)
+			Debug("Rich header signature obfuscated", "offset", fmt.Sprintf("0x%X", addr-baseAddress))
 			break
 		}
 	}
@@ -299,13 +299,13 @@ func obfuscateRichHeader(processHandle windows.Handle, baseAddress uintptr) erro
 func obfuscateDebugDirectory(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
 	// This would require parsing data directories and obfuscating debug info
 	// For now, just log the attempt
-	Printf("Debug directory obfuscation attempted\n")
+	Debug("Debug directory obfuscation attempted")
 	return nil
 }
 
 // manipulatePEMetadata manipulates timestamps and checksums
 func manipulatePEMetadata(processHandle windows.Handle, baseAddress uintptr, info *PEHeaderInfo) error {
-	Printf("Manipulating PE metadata\n")
+	Debug("Manipulating PE metadata")
 
 	// Modify timestamp in COFF header
 	timestampAddr := baseAddress + uintptr(info.PEHeaderOffset) + 8
@@ -323,10 +323,10 @@ func manipulatePEMetadata(processHandle windows.Handle, baseAddress uintptr, inf
 
 	err = WriteProcessMemory(processHandle, checksumAddr, unsafe.Pointer(&zeroChecksum), 4, &bytesWritten)
 	if err != nil {
-		Printf("Warning: Failed to zero checksum: %v\n", err)
+		Warn("Failed to zero checksum", "error", err)
 	}
 
-	Printf("PE metadata manipulation completed\n")
+	Debug("PE metadata manipulation completed")
 	return nil
 }
 
@@ -389,7 +389,7 @@ func EraseEntryPoint(processHandle windows.Handle, baseAddress uintptr) error {
 
 // InvisibleMemoryAllocation allocates memory in high address space to avoid detection
 func InvisibleMemoryAllocation(hProcess windows.Handle, size uintptr) (uintptr, error) {
-	Printf("Attempting to allocate invisible memory in high address space, size: %d bytes\n", size)
+	Debug("Attempting to allocate invisible memory in high address space", "size", size)
 
 	// 获取适合当前架构的高地址
 	var highAddresses []uintptr
@@ -412,24 +412,24 @@ func InvisibleMemoryAllocation(hProcess windows.Handle, size uintptr) (uintptr, 
 	}
 
 	for _, addr := range highAddresses {
-		Printf("Trying to allocate memory at address 0x%X...\n", addr)
+		Debug("Trying to allocate memory", "address", fmt.Sprintf("0x%X", addr))
 		baseAddress, err := VirtualAllocEx(hProcess, addr, size,
 			windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
 		if err == nil {
-			Printf("Successfully allocated invisible memory at address 0x%X\n", baseAddress)
+			Debug("Successfully allocated invisible memory", "address", fmt.Sprintf("0x%X", baseAddress))
 			return baseAddress, nil
 		}
-		Printf("Failed to allocate at 0x%X: %v\n", addr, err)
+		Debug("Failed to allocate memory", "address", fmt.Sprintf("0x%X", addr), "error", err)
 	}
 
 	// 如果所有高地址都失败，尝试让系统自动选择
-	Printf("Failed to allocate memory in high address space, letting system choose address...\n")
+	Debug("Failed to allocate memory in high address space, letting system choose address")
 	baseAddress, err := VirtualAllocEx(hProcess, 0, size,
 		windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
 	if err != nil {
 		return 0, fmt.Errorf("Failed to allocate invisible memory: %v", err)
 	}
-	Printf("System selected address for invisible memory: 0x%X\n", baseAddress)
+	Debug("System selected address for invisible memory", "address", fmt.Sprintf("0x%X", baseAddress))
 	return baseAddress, nil
 }
 
@@ -444,7 +444,7 @@ func ManualMapDLL(hProcess windows.Handle, dllBytes []byte) (uintptr, error) {
 		return 0, fmt.Errorf("DLL data cannot be empty")
 	}
 
-	Printf("Starting manual mapping of DLL, DLL size: %d bytes\n", len(dllBytes))
+	Debug("Starting manual mapping of DLL", "DLL size", len(dllBytes))
 
 	// 解析PE头
 	peHeader, err := ParsePEHeader(dllBytes)
@@ -452,7 +452,7 @@ func ManualMapDLL(hProcess windows.Handle, dllBytes []byte) (uintptr, error) {
 		return 0, fmt.Errorf("Failed to parse PE header: %v", err)
 	}
 
-	Printf("Successfully parsed PE header, image size: %d bytes\n", peHeader.GetSizeOfImage())
+	Debug("Successfully parsed PE header", "image size", peHeader.GetSizeOfImage())
 
 	// 计算需要分配的内存大小
 	imageSize := peHeader.GetSizeOfImage()
@@ -461,50 +461,50 @@ func ManualMapDLL(hProcess windows.Handle, dllBytes []byte) (uintptr, error) {
 	var baseAddress uintptr
 
 	// 分配内存 - 简化版本
-	Printf("Allocating memory for DLL...\n")
+	Debug("Allocating memory for DLL")
 	baseAddress, err = VirtualAllocEx(hProcess, 0, uintptr(imageSize),
 		windows.MEM_RESERVE|windows.MEM_COMMIT, windows.PAGE_EXECUTE_READWRITE)
 	if err != nil {
 		return 0, fmt.Errorf("Failed to allocate memory in target process: %v", err)
 	}
-	Printf("Successfully allocated memory at address 0x%X\n", baseAddress)
+	Debug("Successfully allocated memory", "address", fmt.Sprintf("0x%X", baseAddress))
 
 	// 映射PE文件各节到远程进程内存
-	Printf("Starting to map PE sections to remote process memory...\n")
+	Debug("Starting to map PE sections to remote process memory")
 	tempInjector := &Injector{} // Create temporary injector instance for method calls
 	err = tempInjector.MapSections(hProcess, dllBytes, baseAddress, peHeader)
 	if err != nil {
 		return 0, fmt.Errorf("Failed to map PE sections: %v", err)
 	}
-	Printf("Successfully mapped PE sections\n")
+	Debug("Successfully mapped PE sections")
 
 	// 修复导入表
-	Printf("Starting to fix import table...\n")
+	Debug("Starting to fix import table")
 	err = FixImports(hProcess, baseAddress, peHeader)
 	if err != nil {
 		return 0, fmt.Errorf("Failed to fix import table: %v", err)
 	}
-	Printf("Successfully fixed import table\n")
+	Debug("Successfully fixed import table")
 
 	// 修复重定位
-	Printf("Starting to fix relocations...\n")
+	Debug("Starting to fix relocations")
 	err = FixRelocations(hProcess, baseAddress, peHeader)
 	if err != nil {
 		return 0, fmt.Errorf("Failed to fix relocations: %v", err)
 	}
-	Printf("Successfully fixed relocations\n")
+	Debug("Successfully fixed relocations")
 
 	// 执行DLL入口点
-	Printf("Starting to execute DLL entry point...\n")
+	Debug("Starting to execute DLL entry point")
 	err = ExecuteDllEntry(hProcess, baseAddress, peHeader)
 	if err != nil {
 		return 0, fmt.Errorf("Failed to execute DLL entry point: %v", err)
 	}
-	Printf("Successfully executed DLL entry point\n")
+	Debug("Successfully executed DLL entry point")
 
 	// 应用高级反检测技术已移除，因为需要options参数
 
-	Printf("Manual mapping of DLL completed, base address: 0x%X\n", baseAddress)
+	Debug("Manual mapping of DLL completed", "base address", fmt.Sprintf("0x%X", baseAddress))
 	return baseAddress, nil
 }
 
@@ -559,7 +559,7 @@ func FindLegitProcess() (uint32, string, error) {
 					windows.CloseHandle(hProcess)
 					targetPID = processEntry.ProcessID
 					targetName = processName
-					Printf("Found accessible legitimate process: %s (PID: %d)\n", targetName, targetPID)
+					Debug("Found accessible legitimate process", "process", targetName, "PID", targetPID)
 					break
 				}
 				// 如果无法打开进程，继续查找下一个
@@ -578,7 +578,7 @@ func FindLegitProcess() (uint32, string, error) {
 
 	if targetPID == 0 {
 		// 如果找不到现有的合法进程，尝试启动一个新的记事本进程
-		Println("Could not find accessible legitimate process, trying to start Notepad...")
+		Debug("Could not find accessible legitimate process, trying to start Notepad")
 
 		// 创建记事本进程
 		si := windows.StartupInfo{}
@@ -611,7 +611,7 @@ func FindLegitProcess() (uint32, string, error) {
 
 		targetPID = pi.ProcessId
 		targetName = "notepad.exe"
-		Printf("Started new Notepad process: PID %d\n", targetPID)
+		Debug("Started new Notepad process", "PID", targetPID)
 	}
 
 	if targetPID == 0 {
@@ -623,7 +623,7 @@ func FindLegitProcess() (uint32, string, error) {
 
 // LegitimateProcessInjection performs injection through a legitimate process
 func LegitimateProcessInjection(hProcess windows.Handle, dllBytes []byte) error {
-	Printf("Starting legitimate process injection\n")
+	Debug("Starting legitimate process injection")
 
 	// Find a legitimate process to use as intermediary
 	legitPID, legitName, err := FindLegitProcess()
@@ -631,7 +631,7 @@ func LegitimateProcessInjection(hProcess windows.Handle, dllBytes []byte) error 
 		return fmt.Errorf("failed to find legitimate process: %v", err)
 	}
 
-	Printf("Using legitimate process: %s (PID: %d)\n", legitName, legitPID)
+	Debug("Using legitimate process", "process", legitName, "PID", legitPID)
 
 	// Open legitimate process
 	legitHandle, err := windows.OpenProcess(
@@ -696,7 +696,7 @@ func LegitimateProcessInjection(hProcess windows.Handle, dllBytes []byte) error 
 		return fmt.Errorf("legitimate process injection timed out")
 	}
 
-	Printf("Successfully injected DLL into legitimate process\n")
+	Debug("Successfully injected DLL into legitimate process")
 
 	// Now the DLL should be running in the legitimate process
 	// and can be used to inject into the target process through
@@ -707,7 +707,7 @@ func LegitimateProcessInjection(hProcess windows.Handle, dllBytes []byte) error 
 
 // ErasePEHeaderSafely performs safer PE header erasure for LoadLibrary-based injections
 func ErasePEHeaderSafely(processHandle windows.Handle, baseAddress uintptr) error {
-	Printf("Starting safe PE header erasure for LoadLibrary-based injection\n")
+	Debug("Starting safe PE header erasure for LoadLibrary-based injection")
 
 	// Only erase non-critical parts of the PE header
 	// Preserve export table, import table, and other critical structures
@@ -734,16 +734,16 @@ func ErasePEHeaderSafely(processHandle windows.Handle, baseAddress uintptr) erro
 	err = WriteProcessMemory(processHandle, baseAddress+uintptr(peOffset),
 		unsafe.Pointer(&modifiedSignature[0]), 4, &bytesWritten)
 	if err != nil {
-		Printf("Warning: Failed to modify PE signature: %v\n", err)
+		Warn("Failed to modify PE signature", "error", err)
 	}
 
-	Printf("Safe PE header erasure completed\n")
+	Debug("Safe PE header erasure completed")
 	return nil
 }
 
 // EraseEntryPointSafely performs safer entry point erasure for LoadLibrary-based injections
 func EraseEntryPointSafely(processHandle windows.Handle, baseAddress uintptr) error {
-	Printf("Starting safe entry point erasure for LoadLibrary-based injection\n")
+	Debug("Starting safe entry point erasure for LoadLibrary-based injection")
 
 	// Read PE header to find entry point
 	var dosHeader [64]byte
@@ -768,7 +768,7 @@ func EraseEntryPointSafely(processHandle windows.Handle, baseAddress uintptr) er
 	entryPointRVA := *(*uint32)(unsafe.Pointer(&ntHeaders[24+16+40]))
 
 	if entryPointRVA == 0 {
-		Printf("No entry point found, skipping erasure\n")
+		Debug("No entry point found, skipping erasure")
 		return nil
 	}
 
@@ -785,7 +785,7 @@ func EraseEntryPointSafely(processHandle windows.Handle, baseAddress uintptr) er
 		return fmt.Errorf("failed to modify entry point: %v", err)
 	}
 
-	Printf("Safe entry point modification completed\n")
+	Debug("Safe entry point modification completed")
 	return nil
 }
 
