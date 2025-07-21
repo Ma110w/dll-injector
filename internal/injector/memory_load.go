@@ -1112,6 +1112,8 @@ func (i *Injector) executeDllMainWithShellcode(hProcess windows.Handle, entryPoi
 			return fmt.Errorf("DllMain returned FALSE - initialization failed")
 		} else if exitCode == 0xC0000001 { // STATUS_UNSUCCESSFUL
 			return fmt.Errorf("DllMain failed with STATUS_UNSUCCESSFUL - DLL initialization error")
+		} else if exitCode == 0xC000001D { // STATUS_ILLEGAL_INSTRUCTION
+			return fmt.Errorf("DllMain failed with NT error code: 0xC000001D (STATUS_ILLEGAL_INSTRUCTION)")
 		} else if exitCode >= 0xC0000000 { // NT error codes
 			return fmt.Errorf("DllMain failed with NT error code: 0x%X", exitCode)
 		} else if exitCode != 1 && exitCode < 0x80000000 { // Not TRUE and not a valid error code
@@ -1191,10 +1193,15 @@ func (i *Injector) executeDllMainWithCrashProtection(hProcess windows.Handle, en
 		// Check for specific error patterns that can be recovered from
 		if strings.Contains(err.Error(), "STATUS_ILLEGAL_INSTRUCTION") ||
 			strings.Contains(err.Error(), "0xC000001D") {
-			i.logger.Info("Detected CPU instruction incompatibility, attempting automatic recovery")
-			i.logger.Info("Enabling SkipDllMain for automatic recovery")
-			i.bypassOptions.SkipDllMain = true
-			return nil // Consider this a successful recovery
+			i.logger.Warn("Detected CPU instruction incompatibility")
+			i.logger.Warn("The DLL was successfully loaded into memory, but DllMain contains CPU instructions not supported by the target process")
+			i.logger.Warn("The injection succeeded, but the target process may be unstable")
+
+			// Since the DLL is already loaded, we can't undo the damage
+			// Return success with a warning about potential instability
+			i.logger.Info("Recommendation: Use SkipDllMain option for this DLL to avoid crashes")
+			i.logger.Info("Alternative: Recompile the DLL with /arch:SSE2 or lower CPU requirements")
+			return nil // DLL is loaded, but process may crash later
 		}
 
 		// For other errors, return the original error
