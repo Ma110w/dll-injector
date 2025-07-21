@@ -40,10 +40,6 @@ type Application struct {
 	logLines            []string
 	maxLogLines         int
 
-	// Emoji fallback support
-	useEmojiText bool
-	emojiMap     map[string]string
-
 	// Injection options
 	injectionMethod int32
 	methodNames     []string
@@ -148,6 +144,17 @@ func convertToZapFields(fields ...interface{}) []zap.Field {
 	return zapFields
 }
 
+// Emoji text fallbacks for use in UI
+var emojiTextMap = map[string]string{
+	"✅":  "[OK]",
+	"❌":  "[ERROR]",
+	"⚠️": "[WARN]",
+	"🚫":  "[BLOCKED]",
+	"🔄":  "[REFRESH]",
+	"☐":  "[ ]",
+	"🛡️": "[SHIELD]",
+}
+
 // NewApplication creates a new GUI application instance
 func NewApplication(title string, width, height int) *Application {
 	app := &Application{
@@ -168,18 +175,6 @@ func NewApplication(title string, width, height int) *Application {
 		injectionResultChan: make(chan InjectionResult, 10), // 增加缓冲大小
 		logMessageChan:      make(chan string, 100),         // 日志消息通道
 		uiUpdateChan:        make(chan func(), 50),          // UI更新通道
-
-		// Initialize emoji fallback
-		useEmojiText: false, // Will be set to true if emoji fonts fail to load
-		emojiMap: map[string]string{
-			"✅":  "[OK]",
-			"❌":  "[ERROR]",
-			"⚠️": "[WARN]",
-			"🚫":  "[BLOCKED]",
-			"🔄":  "[REFRESH]",
-			"☐":  "[ ]",
-			"🛡️": "[SHIELD]",
-		},
 	}
 
 	// Initialize logger
@@ -752,141 +747,20 @@ func (app *Application) Run() error {
 	return nil
 }
 
-// setupFonts configures font atlas with custom fonts and emoji support
-// This function:
-// 1. Loads SourceHanSansSC-Regular.ttf for Chinese text display
-// 2. Registers all emoji strings used in the application
-// 3. Adds Unicode-capable fonts for emoji support
-// 4. Uses fallback approach with text replacement if fonts fail
+// setupFonts is now a no-op since FontManager is removed
 func (app *Application) setupFonts() {
-	app.logger.Info("Setting up fonts with SourceHanSansSC support...")
+	app.logger.Info("Font support removed from application")
+}
 
-	// Get the default font atlas
-	fontAtlas := giu.Context.FontAtlas
-	if fontAtlas == nil {
-		app.logger.Error("FontAtlas is nil, cannot configure font support")
-		return
-	}
-
-	// Try to load SourceHanSansSC-Regular.ttf as the default font
-	fontLoaded := false
-	fontPaths := []string{
-		"fonts/SourceHanSansSC-Regular.ttf",
-		"./fonts/SourceHanSansSC-Regular.ttf",
-		"../fonts/SourceHanSansSC-Regular.ttf",
-		"SourceHanSansSC-Regular.ttf",
-	}
-
-	for _, fontPath := range fontPaths {
-		app.logger.Debug("Trying to load SourceHanSansSC font", zap.String("path", fontPath))
-		if _, err := os.Stat(fontPath); err == nil {
-			// Read font file
-			fontBytes, err := os.ReadFile(fontPath)
-			if err != nil {
-				app.logger.Debug("Failed to read font file", zap.String("path", fontPath), zap.Error(err))
-				continue
-			}
-
-			// Set SourceHanSansSC as the default font
-			fontAtlas.SetDefaultFontFromBytes(fontBytes, 16.0)
-			app.logger.Info("Successfully set SourceHanSansSC as default font", zap.String("path", fontPath))
-			fontLoaded = true
-			break
-		} else {
-			app.logger.Debug("Font file not found", zap.String("path", fontPath))
-		}
-	}
-
-	if !fontLoaded {
-		app.logger.Warn("SourceHanSansSC font not found, trying system fonts for Chinese support")
-
-		// Try to load system fonts that support Chinese
-		if runtime.GOOS == "windows" {
-			chineseFonts := []string{
-				"Microsoft YaHei", // Windows Vista+ Chinese font
-				"SimSun",          // Traditional Windows Chinese font
-				"SimHei",          // Windows Chinese font
-				"KaiTi",           // Windows Chinese font
-				"FangSong",        // Windows Chinese font
-			}
-
-			for _, fontName := range chineseFonts {
-				app.logger.Debug("Trying to set Chinese system font as default", zap.String("font", fontName))
-				fontAtlas.SetDefaultFont(fontName, 16.0)
-				app.logger.Info("Successfully set Chinese system font as default", zap.String("font", fontName))
-				fontLoaded = true
-				break
-			}
-		}
-
-		if !fontLoaded {
-			app.logger.Info("No Chinese fonts found, using default font (Chinese characters may not display correctly)")
-		}
-	}
-
-	// Register all emoji strings used in the application
-	emojiStrings := []string{
-		"✅", "❌", "⚠️", "🚫", "🔄", "☐", "🛡️",
-	}
-
-	app.logger.Info("Registering emoji strings", zap.Int("count", len(emojiStrings)))
-	for _, emoji := range emojiStrings {
-		fontAtlas.RegisterString(emoji)
-		app.logger.Debug("Registered emoji", zap.String("emoji", emoji))
-	}
-
-	// Try to add additional Unicode-capable fonts for emoji support
-	emojiFont := false
-	if runtime.GOOS == "windows" {
-		app.logger.Info("Attempting to load Windows Unicode fonts for emoji support...")
-		// List of fonts to try (in order of preference)
-		fontCandidates := []string{
-			"Segoe UI Emoji",       // Windows 10+ emoji font
-			"Segoe UI Symbol",      // Windows 8.1+ symbol font
-			"Arial Unicode MS",     // Microsoft Office Unicode font
-			"Lucida Sans Unicode",  // Windows Unicode font
-			"Tahoma",               // Windows system font with Unicode
-			"Microsoft Sans Serif", // Windows system font
-		}
-
-		for _, fontName := range fontCandidates {
-			app.logger.Debug("Trying to load emoji font", zap.String("font", fontName))
-			if font := fontAtlas.AddFont(fontName, 16.0); font != nil {
-				app.logger.Info("Successfully loaded emoji font", zap.String("font", fontName))
-				emojiFont = true
-				break
-			} else {
-				app.logger.Debug("Failed to load emoji font", zap.String("font", fontName))
-			}
-		}
-	}
-
-	// Determine if we need text fallback for emojis
-	if !fontLoaded && !emojiFont {
-		app.logger.Warn("No Unicode fonts found, enabling text fallback for emojis")
-		app.useEmojiText = true
-	} else if !emojiFont {
-		app.logger.Info("Using SourceHanSansSC for emoji display (may have limited emoji support)")
-		app.useEmojiText = false
-	} else {
-		app.logger.Info("Emoji fonts loaded successfully")
-		app.useEmojiText = false
-	}
-
-	app.logger.Info("Font configuration completed",
-		zap.Bool("sourceHanSansLoaded", fontLoaded),
-		zap.Bool("emojiFontLoaded", emojiFont),
-		zap.Bool("useTextFallback", app.useEmojiText))
+// monitorFontLoading is now a no-op since FontManager is removed
+func (app *Application) monitorFontLoading() {
+	// no-op - functionality removed
 }
 
 // getEmojiText returns the appropriate text for emoji display
-// If emoji fonts are loaded, returns the original emoji
-// If not, returns a text fallback
 func (app *Application) getEmojiText(emoji string) string {
-	if app.useEmojiText {
-		if fallback, exists := app.emojiMap[emoji]; exists {
-			return fallback
-		}
+	if fallback, exists := emojiTextMap[emoji]; exists {
+		return fallback
 	}
 	return emoji
 }
@@ -913,6 +787,9 @@ func (app *Application) loop() {
 	giu.SingleWindow().Layout(
 		giu.Style().SetStyle(giu.StyleVarWindowPadding, 15, 15).To(
 			giu.Column(
+				// Font loading progress (if active)
+				app.buildFontLoadingProgress(),
+
 				// Top row: DLL File and Target Process
 				app.buildTopRow(),
 				giu.Spacing(),
@@ -1896,6 +1773,12 @@ func (app *Application) buildDialogs() {
 			),
 		)
 	}
+}
+
+// buildFontLoadingProgress builds the font loading progress indicator
+func (app *Application) buildFontLoadingProgress() giu.Widget {
+	// Font loading functionality has been removed
+	return giu.Row()
 }
 
 // onInjectClicked handles the inject button click

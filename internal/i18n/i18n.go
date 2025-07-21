@@ -107,7 +107,7 @@ func (l *Localizer) initTranslations() {
 		"dll_file":               "DLL File:",
 		"target_process":         "Target Process:",
 		"injection_method":       "Injection Method:",
-		"anti_detection_options": "🛡️ Anti-Detection Options",
+		"anti_detection_options": "Anti-Detection Options",
 		"select_dll_placeholder": "Select DLL file path...",
 		"select_process":         "Select Process",
 		"no_process_selected":    "No Process Selected",
@@ -151,10 +151,10 @@ func (l *Localizer) initTranslations() {
 
 		// Preset Options
 		"preset_info":      "Quick apply preset configurations:",
-		"basic_stealth":    "🟢 Basic",
-		"advanced_stealth": "🟡 Advanced",
-		"expert_stealth":   "🔴 Expert",
-		"clear_all":        "🔄 Clear",
+		"basic_stealth":    "Basic",
+		"advanced_stealth": "Advanced",
+		"expert_stealth":   "Expert",
+		"clear_all":        "Clear",
 
 		// Messages and Logs
 		"dll_injector_starting":      "DLL Injector starting",
@@ -187,7 +187,7 @@ func (l *Localizer) initTranslations() {
 		"dll_file":               "DLL文件:",
 		"target_process":         "目标进程:",
 		"injection_method":       "注入方式:",
-		"anti_detection_options": "🛡️ 反检测选项",
+		"anti_detection_options": "反检测选项",
 		"select_dll_placeholder": "选择DLL文件路径...",
 		"select_process":         "选择进程",
 		"no_process_selected":    "未选择进程",
@@ -231,19 +231,19 @@ func (l *Localizer) initTranslations() {
 
 		// Preset Options
 		"preset_info":      "快速应用预设配置:",
-		"basic_stealth":    "🟢 基础",
-		"advanced_stealth": "🟡 高级",
-		"expert_stealth":   "🔴 专家",
-		"clear_all":        "🔄 清除",
+		"basic_stealth":    "基础",
+		"advanced_stealth": "高级",
+		"expert_stealth":   "专家",
+		"clear_all":        "清除",
 
 		// Messages and Logs
-		"dll_injector_starting":      "🚀 DLL注入器启动中",
-		"dll_injector_started":       "🚀 DLL注入器已启动",
-		"injection_method_selected":  "🔧 选择注入方式",
-		"process_selected":           "🎯 选择目标进程",
-		"starting_dll_injection":     "⚡ 开始注入",
-		"injection_successful":       "✅ 注入成功完成",
-		"injection_failed":           "❌ 注入失败",
+		"dll_injector_starting":      "DLL注入器启动中",
+		"dll_injector_started":       "DLL注入器已启动",
+		"injection_method_selected":  "选择注入方式",
+		"process_selected":           "选择目标进程",
+		"starting_dll_injection":     "开始注入",
+		"injection_successful":       "注入成功完成",
+		"injection_failed":           "注入失败",
 		"no_dll_selected":            "未选择DLL文件",
 		"no_process_selected_error":  "未选择目标进程",
 		"please_select_dll":          "请选择一个DLL文件",
